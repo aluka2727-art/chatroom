@@ -34,6 +34,7 @@ def create_app(test_config=None):
     project_dir = Path(__file__).resolve().parent
     app = Flask(__name__, template_folder=str(project_dir))
     app.config.from_mapping(
+        APP_VERSION="1.0.0",
         SECRET_KEY=os.environ.get("CHATROOM_SECRET_KEY"),
         DATABASE=os.environ.get("CHATROOM_DATABASE", str(project_dir / "chatroom.sqlite3")),
         SESSION_COOKIE_HTTPONLY=True,

@@ -26,6 +26,7 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
+        self.assertIn(b"PIGIN v1.0.0", page.data)
         self.assertIn(b"/static/app.js", page.data)
         self.assertEqual(script.status_code, 200)
         script.close()
