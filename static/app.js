@@ -125,9 +125,15 @@ function addMessage(message) {
   feed.append(article);
 }
 
-function scrollToLatestMessage() {
-  const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
-  requestAnimationFrame(() => feed.scrollTo({ top: feed.scrollHeight, behavior }));
+function scrollToLatestMessage(behavior = "smooth") {
+  const scroll = () => {
+    feed.scrollTop = feed.scrollHeight;
+  };
+  requestAnimationFrame(() => {
+    scroll();
+    requestAnimationFrame(scroll);
+  });
+  document.fonts?.ready.then(scroll);
 }
 
 async function loadMessages() {
@@ -135,7 +141,8 @@ async function loadMessages() {
   try {
     const data = await api(`/api/messages?after=${lastMessageId}`);
     const messages = data.messages || [];
-    if (!lastMessageId && !messages.length) {
+    const initialLoad = lastMessageId === 0;
+    if (initialLoad && !messages.length) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
       empty.textContent = "It's quiet in here.";
@@ -147,7 +154,10 @@ async function loadMessages() {
       addMessage(message);
       lastMessageId = Math.max(lastMessageId, message.id);
     }
-    if (messages.length) scrollToLatestMessage();
+    if (messages.length) {
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth");
+    }
   } catch (error) {
     if (error.status === 401) showLogin();
   }
