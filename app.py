@@ -82,6 +82,17 @@ def create_app(test_config=None):
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
             CREATE INDEX IF NOT EXISTS messages_id_idx ON messages(id);
+            CREATE TABLE IF NOT EXISTS direct_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                recipient_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500),
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            );
+            CREATE INDEX IF NOT EXISTS direct_messages_sender_idx
+                ON direct_messages(sender_id, recipient_id, id);
+            CREATE INDEX IF NOT EXISTS direct_messages_recipient_idx
+                ON direct_messages(recipient_id, sender_id, id);
             CREATE TABLE IF NOT EXISTS message_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 message_id INTEGER NOT NULL
@@ -419,6 +430,111 @@ def create_app(test_config=None):
         cursor = database.execute(
             "INSERT INTO messages (author_id, body) VALUES (?, ?)",
             (g.account["id"], text),
+        )
+        database.commit()
+        return jsonify(id=cursor.lastrowid), 201
+
+    @app.get("/api/dms")
+    @login_required
+    def api_dm_contacts():
+        rows = get_db().execute(
+            """
+            SELECT a.id, a.username, d.body AS last_message, d.created_at AS last_message_at
+            FROM accounts AS a
+            LEFT JOIN direct_messages AS d ON d.id = (
+                SELECT latest.id
+                FROM direct_messages AS latest
+                WHERE (latest.sender_id = ? AND latest.recipient_id = a.id)
+                   OR (latest.sender_id = a.id AND latest.recipient_id = ?)
+                ORDER BY latest.id DESC
+                LIMIT 1
+            )
+            WHERE a.id != ?
+            ORDER BY CASE WHEN d.id IS NULL THEN 1 ELSE 0 END,
+                     d.id DESC,
+                     a.username COLLATE NOCASE
+            """,
+            (g.account["id"], g.account["id"], g.account["id"]),
+        ).fetchall()
+        return jsonify(contacts=[dict(row) for row in rows])
+
+    @app.get("/api/dms/<int:account_id>")
+    @login_required
+    def api_dm_messages(account_id):
+        if account_id == g.account["id"]:
+            return jsonify(error="You can't start a conversation with yourself."), 400
+        try:
+            after_id = max(0, int(request.args.get("after", "0")))
+        except ValueError:
+            return jsonify(error="Invalid message cursor."), 400
+
+        database = get_db()
+        if database.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
+            return jsonify(error="Account not found."), 404
+        parameters = (g.account["id"], account_id, account_id, g.account["id"])
+        if after_id:
+            rows = database.execute(
+                """
+                SELECT d.id, d.sender_id, d.body, d.created_at, a.username
+                FROM direct_messages AS d
+                JOIN accounts AS a ON a.id = d.sender_id
+                WHERE ((d.sender_id = ? AND d.recipient_id = ?)
+                    OR (d.sender_id = ? AND d.recipient_id = ?))
+                  AND d.id > ?
+                ORDER BY d.id ASC
+                LIMIT 100
+                """,
+                (*parameters, after_id),
+            ).fetchall()
+        else:
+            rows = database.execute(
+                """
+                SELECT * FROM (
+                    SELECT d.id, d.sender_id, d.body, d.created_at, a.username
+                    FROM direct_messages AS d
+                    JOIN accounts AS a ON a.id = d.sender_id
+                    WHERE (d.sender_id = ? AND d.recipient_id = ?)
+                       OR (d.sender_id = ? AND d.recipient_id = ?)
+                    ORDER BY d.id DESC
+                    LIMIT 100
+                ) ORDER BY id ASC
+                """,
+                parameters,
+            ).fetchall()
+        cursor = max((row["id"] for row in rows), default=after_id)
+        return jsonify(
+            messages=[
+                {
+                    "id": row["id"],
+                    "username": row["username"],
+                    "text": row["body"],
+                    "created_at": row["created_at"],
+                    "is_own": row["sender_id"] == g.account["id"],
+                }
+                for row in rows
+            ],
+            cursor=cursor,
+        )
+
+    @app.post("/api/dms/<int:account_id>")
+    @login_required
+    def api_send_dm(account_id):
+        if account_id == g.account["id"]:
+            return jsonify(error="You can't send a message to yourself."), 400
+        data = request.get_json(silent=True) or {}
+        text = data.get("text", "")
+        if not isinstance(text, str):
+            return jsonify(error="Message must be text."), 400
+        text = text.strip()
+        if not text or len(text) > MAX_MESSAGE_LENGTH:
+            return jsonify(error="Messages must be between 1 and 500 characters."), 400
+
+        database = get_db()
+        if database.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
+            return jsonify(error="Account not found."), 404
+        cursor = database.execute(
+            "INSERT INTO direct_messages (sender_id, recipient_id, body) VALUES (?, ?, ?)",
+            (g.account["id"], account_id, text),
         )
         database.commit()
         return jsonify(id=cursor.lastrowid), 201

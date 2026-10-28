@@ -6,7 +6,9 @@ Browser-local profiles from the earlier static demo are not imported. Create the
 
 The app has a 100-account limit. `Cricket` is reserved for the admin account. Never delete Cricket; the admin cleanup command refuses to do so.
 
-When signed in as Cricket, the **ADMIN** side tab can delete member accounts or individual messages. Deleted accounts' messages and individually deleted messages remain as `[DELETED]`; usernames freed by account deletion can be reused. Affected active users receive a blocking warning screen. Only Cricket is authorized by the admin API.
+The **DMS** side tab lets signed-in users start private conversations with other active accounts. Direct messages are visible only to their sender and recipient and are removed if either account is deleted.
+
+When signed in as Cricket, the **ADMIN** side tab can delete member accounts or individual messages. Deleted accounts' room messages and individually deleted room messages remain as `[DELETED]`; usernames freed by account deletion can be reused. Affected active users receive a blocking warning screen. Only Cricket is authorized by the admin API.
 
 ## Run locally
 

@@ -15,12 +15,23 @@ const warningText = document.querySelector("#warningText");
 const warningAction = document.querySelector("#warningAction");
 const adminTab = document.querySelector("#adminTab");
 const chatTab = document.querySelector("#chatTab");
+const dmTab = document.querySelector("#dmTab");
 const chatView = document.querySelector("#chatView");
 const adminPanel = document.querySelector("#adminPanel");
 const adminError = document.querySelector("#adminError");
+const dmPanel = document.querySelector("#dmPanel");
+const dmError = document.querySelector("#dmError");
+const dmContacts = document.querySelector("#dmContacts");
+const dmFeed = document.querySelector("#dmFeed");
+const dmMessageInput = document.querySelector("#dmMessageInput");
+const dmSendButton = document.querySelector("#dmSendButton");
 let currentUser = null;
 let csrfToken = "";
 let messageCursor = 0;
+let selectedDmUser = null;
+let dmMessageCursor = 0;
+let dmContactsSnapshot = "";
+let activeView = "chat";
 let accountCreatedTimeout;
 let pollingTimer;
 let warningKind = null;
@@ -78,10 +89,24 @@ function showLogin() {
   warningKind = null;
   warningScreen.hidden = true;
   feed.replaceChildren();
+  dmFeed.replaceChildren();
+  dmContacts.replaceChildren();
+  selectedDmUser = null;
+  dmMessageCursor = 0;
+  dmContactsSnapshot = "";
+  dmMessageInput.value = "";
+  dmMessageInput.disabled = true;
+  dmMessageInput.style.height = "34px";
+  dmMessageInput.placeholder = "Choose someone to message...";
+  dmSendButton.disabled = true;
+  activeView = "chat";
   adminPanel.hidden = true;
+  dmPanel.hidden = true;
   chatView.hidden = false;
   chatTab.classList.add("active");
   chatTab.setAttribute("aria-pressed", "true");
+  dmTab.classList.remove("active");
+  dmTab.setAttribute("aria-pressed", "false");
   adminTab.classList.remove("active");
   adminTab.setAttribute("aria-pressed", "false");
   room.hidden = true;
@@ -107,17 +132,37 @@ function showRoom(user) {
   confirmInput.value = "";
   messageCursor = 0;
   feed.replaceChildren();
+  dmFeed.replaceChildren();
+  dmContacts.replaceChildren();
+  selectedDmUser = null;
+  dmMessageCursor = 0;
+  dmContactsSnapshot = "";
+  dmMessageInput.value = "";
+  dmMessageInput.disabled = true;
+  dmMessageInput.style.height = "34px";
+  dmMessageInput.placeholder = "Choose someone to message...";
+  dmSendButton.disabled = true;
+  activeView = "chat";
   const isCricketAdmin = user.role === "admin" && user.username === "Cricket";
   adminTab.hidden = !isCricketAdmin;
   chatView.hidden = false;
+  dmPanel.hidden = true;
   adminPanel.hidden = true;
   chatTab.classList.add("active");
   chatTab.setAttribute("aria-pressed", "true");
+  dmTab.classList.remove("active");
+  dmTab.setAttribute("aria-pressed", "false");
   adminTab.classList.remove("active");
   adminTab.setAttribute("aria-pressed", "false");
   loadMessages();
   clearInterval(pollingTimer);
-  pollingTimer = setInterval(loadMessages, 2500);
+  pollingTimer = setInterval(() => {
+    loadMessages();
+    if (activeView === "dms") {
+      loadDmContacts();
+      loadDmMessages();
+    }
+  }, 2500);
   if (user.warning_count) {
     showWarning("message", `${user.warning_count === 1 ? "An admin deleted one of your messages" : `An admin deleted ${user.warning_count} of your messages`}. Deleted messages remain in the chat as [DELETED].`);
   }
@@ -170,9 +215,9 @@ function addMessage(message) {
   else feed.append(article);
 }
 
-function scrollToLatestMessage(behavior = "smooth") {
+function scrollToLatestMessage(behavior = "smooth", targetFeed = feed) {
   const scroll = () => {
-    feed.scrollTop = feed.scrollHeight;
+    targetFeed.scrollTop = targetFeed.scrollHeight;
   };
   requestAnimationFrame(() => {
     scroll();
@@ -238,6 +283,159 @@ async function initialize() {
 function showAdminError(message) {
   adminError.textContent = message;
   adminError.hidden = !message;
+}
+
+function showDmError(message) {
+  dmError.textContent = message;
+  dmError.hidden = !message;
+}
+
+function renderDmContacts(contacts) {
+  dmContacts.replaceChildren();
+  if (!contacts.length) {
+    const empty = document.createElement("p");
+    empty.className = "dm-contact-empty";
+    empty.textContent = "There are no other room members yet.";
+    dmContacts.append(empty);
+    return;
+  }
+  for (const contact of contacts) {
+    const button = document.createElement("button");
+    button.className = "dm-contact";
+    button.type = "button";
+    button.classList.toggle("active", selectedDmUser?.id === contact.id);
+    button.setAttribute("aria-pressed", String(selectedDmUser?.id === contact.id));
+    const name = document.createElement("span");
+    name.className = "dm-contact-name";
+    name.textContent = contact.username;
+    const preview = document.createElement("span");
+    preview.className = "dm-contact-preview";
+    preview.textContent = contact.last_message || "Start a conversation";
+    button.append(name, preview);
+    button.addEventListener("click", () => selectDmContact(contact));
+    dmContacts.append(button);
+  }
+}
+
+async function loadDmContacts() {
+  if (!currentUser) return;
+  try {
+    const data = await api("/api/dms");
+    const contacts = data.contacts || [];
+    const snapshot = JSON.stringify(contacts);
+    if (snapshot === dmContactsSnapshot) return;
+    dmContactsSnapshot = snapshot;
+    if (selectedDmUser) {
+      selectedDmUser = contacts.find(contact => contact.id === selectedDmUser.id) || null;
+      if (!selectedDmUser) {
+        dmMessageCursor = 0;
+        dmFeed.replaceChildren();
+        const empty = document.createElement("div");
+        empty.className = "empty-state";
+        empty.textContent = "Your private conversations will appear here.";
+        dmFeed.append(empty);
+        document.querySelector("#dmConversationTitle").textContent = "Choose someone to message";
+        document.querySelector("#dmConversationSubtitle").textContent = "Select a room member to start a private conversation.";
+        dmMessageInput.value = "";
+        dmMessageInput.disabled = true;
+        dmMessageInput.style.height = "34px";
+        dmMessageInput.placeholder = "Choose someone to message...";
+        dmSendButton.disabled = true;
+      }
+    }
+    renderDmContacts(contacts);
+  } catch (error) {
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      showDmError(error.message);
+    }
+  }
+}
+
+function selectDmContact(contact) {
+  selectedDmUser = contact;
+  dmMessageCursor = 0;
+  dmFeed.replaceChildren();
+  dmMessageInput.value = "";
+  dmMessageInput.style.height = "34px";
+  dmMessageInput.disabled = false;
+  dmMessageInput.placeholder = `Message ${contact.username}...`;
+  dmSendButton.disabled = true;
+  document.querySelector("#dmConversationTitle").textContent = contact.username;
+  document.querySelector("#dmConversationSubtitle").textContent = "Private conversation";
+  renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
+  showDmError("");
+  loadDmMessages();
+}
+
+function addDmMessage(message) {
+  const article = document.createElement("article");
+  article.className = "message";
+  article.dataset.messageId = message.id;
+  const avatar = document.createElement("div");
+  avatar.className = "message-avatar";
+  avatar.classList.toggle("own", message.is_own);
+  avatar.textContent = message.username[0];
+  avatar.setAttribute("aria-hidden", "true");
+
+  const content = document.createElement("div");
+  content.className = "message-content";
+  const meta = document.createElement("div");
+  meta.className = "message-meta";
+  const author = document.createElement("span");
+  author.className = "message-author";
+  author.textContent = message.username;
+  const time = document.createElement("time");
+  time.className = "message-time";
+  time.dateTime = message.created_at;
+  time.textContent = new Date(message.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const text = document.createElement("p");
+  text.className = "message-text";
+  text.textContent = message.text;
+  meta.append(author, time);
+  content.append(meta, text);
+  article.append(avatar, content);
+  const existing = dmFeed.querySelector(`[data-message-id="${message.id}"]`);
+  if (existing) existing.replaceWith(article);
+  else dmFeed.append(article);
+}
+
+async function loadDmMessages() {
+  if (!currentUser || !selectedDmUser) return;
+  const accountId = selectedDmUser.id;
+  try {
+    const data = await api(`/api/dms/${accountId}?after=${dmMessageCursor}`);
+    if (selectedDmUser?.id !== accountId) return;
+    const messages = data.messages || [];
+    const initialLoad = dmMessageCursor === 0;
+    if (initialLoad && !messages.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "No messages yet. Say hello!";
+      dmFeed.replaceChildren(empty);
+    }
+    for (const message of messages) {
+      dmFeed.querySelector(".empty-state")?.remove();
+      addDmMessage(message);
+    }
+    dmMessageCursor = Math.max(dmMessageCursor, data.cursor || 0);
+    if (messages.length) {
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth", dmFeed);
+    }
+    showDmError("");
+  } catch (error) {
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      showDmError(error.message);
+    }
+  }
 }
 
 function appendAdminEmpty(container, message) {
@@ -341,21 +539,38 @@ async function loadAdminData() {
 
 function setRoomView(view) {
   if (view === "admin" && (currentUser?.role !== "admin" || currentUser.username !== "Cricket")) return;
+  activeView = view;
+  const showChat = view === "chat";
+  const showDms = view === "dms";
   const showAdmin = view === "admin";
-  chatView.hidden = showAdmin;
+  chatView.hidden = !showChat;
+  dmPanel.hidden = !showDms;
   adminPanel.hidden = !showAdmin;
-  chatTab.classList.toggle("active", !showAdmin);
-  chatTab.setAttribute("aria-pressed", String(!showAdmin));
+  chatTab.classList.toggle("active", showChat);
+  chatTab.setAttribute("aria-pressed", String(showChat));
+  dmTab.classList.toggle("active", showDms);
+  dmTab.setAttribute("aria-pressed", String(showDms));
   adminTab.classList.toggle("active", showAdmin);
   adminTab.setAttribute("aria-pressed", String(showAdmin));
+  if (showDms) {
+    showDmError("");
+    loadDmContacts();
+    loadDmMessages();
+  }
   if (showAdmin) loadAdminData();
 }
 
 document.querySelector("#createMode").addEventListener("click", () => setAuthMode("create"));
 document.querySelector("#signInMode").addEventListener("click", () => setAuthMode("signin"));
 chatTab.addEventListener("click", () => setRoomView("chat"));
+dmTab.addEventListener("click", () => setRoomView("dms"));
 adminTab.addEventListener("click", () => setRoomView("admin"));
 document.querySelector("#adminRefresh").addEventListener("click", loadAdminData);
+document.querySelector("#dmRefresh").addEventListener("click", () => {
+  dmContactsSnapshot = "";
+  loadDmContacts();
+  loadDmMessages();
+});
 warningAction.addEventListener("click", async () => {
   const kind = warningKind;
   if (kind === "account") {
@@ -440,6 +655,43 @@ document.querySelector("#messageForm").addEventListener("submit", async event =>
     }
   } finally {
     sendButton.disabled = !messageInput.value.trim();
+  }
+});
+dmMessageInput.addEventListener("input", () => {
+  dmSendButton.disabled = !selectedDmUser || !dmMessageInput.value.trim();
+  dmMessageInput.style.height = "auto";
+  dmMessageInput.style.height = `${Math.min(dmMessageInput.scrollHeight, 110)}px`;
+});
+document.querySelector("#dmMessageForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const text = dmMessageInput.value.trim();
+  if (!text || !selectedDmUser || dmSendButton.disabled) return;
+  dmSendButton.disabled = true;
+  try {
+    await api(`/api/dms/${selectedDmUser.id}`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+    dmMessageInput.value = "";
+    dmMessageInput.style.height = "34px";
+    dmContactsSnapshot = "";
+    await Promise.all([loadDmMessages(), loadDmContacts()]);
+  } catch (error) {
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      showDmError(error.message);
+    }
+  } finally {
+    dmSendButton.disabled = !selectedDmUser || !dmMessageInput.value.trim();
+  }
+});
+dmMessageInput.addEventListener("keydown", event => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    if (!dmSendButton.disabled) document.querySelector("#dmMessageForm").requestSubmit();
   }
 });
 messageInput.addEventListener("keydown", event => {

@@ -8,8 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='admin-tombstones-20261028') }}">
-  <script src="{{ url_for('static', filename='app.js', v='admin-tombstones-20261028') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='direct-messages-20261028') }}">
+  <script src="{{ url_for('static', filename='app.js', v='direct-messages-20261028') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -17,7 +17,7 @@
       <section class="login-panel" aria-labelledby="loginTitle">
         <div class="login-mark" aria-hidden="true">p.</div>
         <h1 id="loginTitle">Enter the room</h1>
-        <p class="login-copy" id="loginCopy">Create an account with a password. We’ll give you an animal name.</p>
+        <p class="login-copy" id="loginCopy">Create an account with a password. We’ll give you an animal username.</p>
         <div class="auth-mode" role="group" aria-label="Account mode">
           <button class="active" id="createMode" type="button" data-mode="create" aria-pressed="true">Create account</button>
           <button id="signInMode" type="button" data-mode="signin" aria-pressed="false">Sign in</button>
@@ -59,6 +59,7 @@
       <div class="room-body">
         <nav class="side-tabs" aria-label="Room views">
           <button class="side-tab active" id="chatTab" type="button" aria-pressed="true">CHAT</button>
+          <button class="side-tab" id="dmTab" type="button" aria-pressed="false">DMS</button>
           <button class="side-tab" id="adminTab" type="button" aria-pressed="false" hidden>ADMIN</button>
         </nav>
         <div class="room-views">
@@ -73,6 +74,34 @@
                   <button class="send-button" id="sendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
                 </div>
               </form>
+            </div>
+          </section>
+          <section class="dm-panel" id="dmPanel" aria-label="Direct messages" hidden>
+            <header class="admin-panel-heading">
+              <div><h2>Direct messages</h2><p>Private conversations with room members</p></div>
+              <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
+            </header>
+            <p class="admin-error" id="dmError" role="alert" hidden></p>
+            <div class="dm-layout">
+              <nav class="dm-contacts" id="dmContacts" aria-label="Conversations"></nav>
+              <section class="dm-conversation" aria-label="Selected conversation">
+                <header class="dm-conversation-heading">
+                  <h3 id="dmConversationTitle">Choose someone to message</h3>
+                  <p id="dmConversationSubtitle">Select a room member to start a private conversation.</p>
+                </header>
+                <section class="feed dm-feed" id="dmFeed" aria-label="Direct messages" aria-live="polite">
+                  <div class="empty-state">Your private conversations will appear here.</div>
+                </section>
+                <div class="composer-wrap">
+                  <form class="composer" id="dmMessageForm">
+                    <textarea id="dmMessageInput" maxlength="500" rows="1" placeholder="Choose someone to message..." aria-label="Write a direct message" disabled></textarea>
+                    <div class="composer-bottom">
+                      <span></span>
+                      <button class="send-button" id="dmSendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
+                    </div>
+                  </form>
+                </div>
+              </section>
             </div>
           </section>
           <section class="admin-panel" id="adminPanel" aria-label="Admin controls" hidden>
