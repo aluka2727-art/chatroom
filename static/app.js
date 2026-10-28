@@ -125,6 +125,11 @@ function addMessage(message) {
   feed.append(article);
 }
 
+function scrollToLatestMessage() {
+  const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  requestAnimationFrame(() => feed.scrollTo({ top: feed.scrollHeight, behavior }));
+}
+
 async function loadMessages() {
   if (!currentUser) return;
   try {
@@ -142,7 +147,7 @@ async function loadMessages() {
       addMessage(message);
       lastMessageId = Math.max(lastMessageId, message.id);
     }
-    if (messages.length) feed.scrollTop = feed.scrollHeight;
+    if (messages.length) scrollToLatestMessage();
   } catch (error) {
     if (error.status === 401) showLogin();
   }
@@ -215,6 +220,7 @@ document.querySelector("#messageForm").addEventListener("submit", async event =>
     messageInput.value = "";
     messageInput.style.height = "34px";
     await loadMessages();
+    scrollToLatestMessage();
   } catch (error) {
     if (error.status === 401) showLogin();
   } finally {
