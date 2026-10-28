@@ -25,7 +25,7 @@ ANIMALS = (
     "Elephant", "Elk", "Emu", "Flamingo", "Fox", "Frog", "Goldfish", "Gorilla",
     "Grasshopper", "Hawk", "Antelope",
 )
-RESERVED_USERNAMES = {"Cricket"}
+RESERVED_USERNAMES = {"Cricket", "Viper"}
 MAX_ACCOUNTS = 100
 MAX_MESSAGE_LENGTH = 500
 
@@ -204,7 +204,7 @@ def create_app(test_config=None):
     def admin_required(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
-            if g.account["role"] != "admin" or g.account["username"].casefold() != "cricket":
+            if g.account["role"] != "admin":
                 return jsonify(error="Admin access required."), 403
             return view(*args, **kwargs)
 
@@ -549,7 +549,7 @@ def create_app(test_config=None):
             FROM accounts AS a
             LEFT JOIN messages AS m ON m.author_id = a.id
             GROUP BY a.id
-            ORDER BY CASE WHEN a.username = 'Cricket' COLLATE NOCASE THEN 0 ELSE 1 END,
+            ORDER BY CASE WHEN a.role = 'admin' THEN 0 ELSE 1 END,
                      a.username COLLATE NOCASE
             """
         ).fetchall()
@@ -624,7 +624,7 @@ def create_app(test_config=None):
 
     @app.cli.command("create-admin")
     def create_admin():
-        """Create or promote the protected Cricket account."""
+        """Create or promote the protected Cricket admin account."""
         database = get_db()
         existing = database.execute(
             "SELECT id FROM accounts WHERE username = 'Cricket' COLLATE NOCASE"
@@ -646,6 +646,37 @@ def create_app(test_config=None):
         )
         database.commit()
         click.echo("Cricket admin account created.")
+
+    @app.cli.command("promote-admin")
+    @click.argument("username")
+    @click.option("--rename-to", "new_username", help="Rename the account while promoting it.")
+    def promote_admin(username, new_username):
+        """Promote an existing account to admin, optionally renaming it."""
+        database = get_db()
+        database.execute("BEGIN IMMEDIATE")
+        account = database.execute(
+            "SELECT id, username FROM accounts WHERE username = ? COLLATE NOCASE",
+            (username,),
+        ).fetchone()
+        if account is None:
+            database.rollback()
+            raise click.ClickException("Account not found.")
+
+        updated_username = new_username or account["username"]
+        conflict = database.execute(
+            "SELECT 1 FROM accounts WHERE username = ? COLLATE NOCASE AND id != ?",
+            (updated_username, account["id"]),
+        ).fetchone()
+        if conflict:
+            database.rollback()
+            raise click.ClickException(f"Username {updated_username} is already in use.")
+
+        database.execute(
+            "UPDATE accounts SET username = ?, role = 'admin' WHERE id = ?",
+            (updated_username, account["id"]),
+        )
+        database.commit()
+        click.echo(f"{account['username']} is now {updated_username} and is an admin.")
 
     @app.cli.command("delete-user")
     @click.argument("username")
@@ -669,10 +700,10 @@ def create_app(test_config=None):
         """Delete all member accounts while preserving Cricket and message history."""
         database = get_db()
         admin = database.execute(
-            "SELECT id FROM accounts WHERE username = 'Cricket' COLLATE NOCASE AND role = 'admin'"
+            "SELECT id FROM accounts WHERE role = 'admin' LIMIT 1"
         ).fetchone()
         if admin is None:
-            raise click.ClickException("Cricket admin account is missing; nothing was deleted.")
+            raise click.ClickException("No admin account exists; nothing was deleted.")
         members = database.execute(
             "SELECT id, username FROM accounts WHERE id != ? AND role != 'admin'",
             (admin["id"],),

@@ -2,13 +2,13 @@
 
 This is a Flask chat app backed by SQLite. Accounts and messages are stored on the server and shared between visitors/devices. Passwords are hashed by Werkzeug; sessions use signed, HTTP-only cookies; mutating API calls require a CSRF token. Message authors are stored by account ID, so deleting an account leaves its messages visible as `[DELETED]`, and the username can be reused safely.
 
-Browser-local profiles from the earlier static demo are not imported. Create the server-backed Cricket account with the CLI command below, then create/sign in to any other accounts on the deployed site.
+Browser-local profiles from the earlier static demo are not imported. Create the server-backed Cricket account with the CLI command below, then create/sign in to any other accounts on the deployed site. Any account with the `admin` role can use the admin panel and API.
 
-The app has a 100-account limit. `Cricket` is reserved for the admin account. Never delete Cricket; the admin cleanup command refuses to do so.
+The app has a 100-account limit. `Cricket` is reserved for the initial admin account. Admin accounts cannot be deleted through the app or the member-delete command.
 
 The **DMS** side tab lets signed-in users start private conversations with other active accounts. Direct messages are visible only to their sender and recipient and are removed if either account is deleted.
 
-When signed in as Cricket, the **ADMIN** side tab can delete member accounts or individual messages. Deleted accounts' room messages and individually deleted room messages remain as `[DELETED]`; usernames freed by account deletion can be reused. Affected active users receive a blocking warning screen. Only Cricket is authorized by the admin API.
+When signed in as an admin, the **ADMIN** side tab can delete member accounts or individual messages. Deleted accounts' room messages and individually deleted room messages remain as `[DELETED]`; usernames freed by account deletion can be reused. Affected active users receive a blocking warning screen.
 
 ## Run locally
 
@@ -27,6 +27,8 @@ flask --app app create-admin
 ```
 
 The command prompts for Cricket's password without echoing it. Use at least 8 characters. Local SQLite data is stored in `chatroom.sqlite3` unless `CHATROOM_DATABASE` is set.
+
+To rename an existing account and promote it to admin, back up the database, then run `flask --app app promote-admin Reindeer --rename-to Viper` with the same database settings the app uses. This keeps the account ID and its message history.
 
 ## Test
 
@@ -78,7 +80,7 @@ python -m unittest discover -s tests -v
 	```
 
 7. In the Web tab, add a static-files mapping for URL `/static/` to `/home/YOURUSERNAME/chatroom/static`.
-8. Back in the Bash console, activate the virtual environment and create Cricket's admin profile. The database path must match the WSGI configuration:
+8. Back in the Bash console, activate the virtual environment and create Cricket's initial admin profile. The database path must match the WSGI configuration:
 
 	```bash
 	workon chatroom-venv
@@ -86,7 +88,7 @@ python -m unittest discover -s tests -v
 	flask --app /home/YOURUSERNAME/chatroom/app.py create-admin
 	```
 
-	Set a strong, unique password at the prompt. The command creates Cricket or promotes an existing Cricket profile to admin; it does not delete messages.
+	Set a strong, unique password at the prompt. The command creates Cricket or promotes an existing Cricket profile to admin; it does not delete messages. To rename and promote the existing Reindeer account instead, back up the database and run `flask --app /home/YOURUSERNAME/chatroom/app.py promote-admin Reindeer --rename-to Viper`.
 9. Click **Reload** in the Web tab, then visit `https://YOURUSERNAME.pythonanywhere.com`.
 
 10. To deploy later changes, push them to GitHub from your development machine, then update the PythonAnywhere checkout and reload the app:
@@ -107,4 +109,4 @@ flask --app /home/YOURUSERNAME/chatroom/app.py delete-user USERNAME
 flask --app /home/YOURUSERNAME/chatroom/app.py delete-non-admin-accounts
 ```
 
-The second command requires an existing Cricket admin account, deletes only non-admin accounts, and retains messages as `[DELETED]`. Cricket is protected from the single-user delete command as well.
+The second command requires at least one admin account, deletes only member accounts, and retains messages as `[DELETED]`. Admin accounts are protected from the single-user delete command.

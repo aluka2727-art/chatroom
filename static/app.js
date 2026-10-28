@@ -143,8 +143,8 @@ function showRoom(user) {
   dmMessageInput.placeholder = "Choose someone to message...";
   dmSendButton.disabled = true;
   activeView = "chat";
-  const isCricketAdmin = user.role === "admin" && user.username === "Cricket";
-  adminTab.hidden = !isCricketAdmin;
+  const isAdmin = user.role === "admin";
+  adminTab.hidden = !isAdmin;
   chatView.hidden = false;
   dmPanel.hidden = true;
   adminPanel.hidden = true;
@@ -166,7 +166,7 @@ function showRoom(user) {
   if (user.warning_count) {
     showWarning("message", `${user.warning_count === 1 ? "An admin deleted one of your messages" : `An admin deleted ${user.warning_count} of your messages`}. Deleted messages remain in the chat as [DELETED].`);
   }
-  if (isCricketAdmin) loadAdminData();
+  if (isAdmin) loadAdminData();
 }
 
 function showWarning(kind, message) {
@@ -450,7 +450,7 @@ function formatAdminTime(value) {
 }
 
 async function loadAdminData() {
-  if (currentUser?.role !== "admin" || currentUser.username !== "Cricket") return;
+  if (currentUser?.role !== "admin") return;
   showAdminError("");
   try {
     const [accountData, messageData] = await Promise.all([
@@ -538,7 +538,7 @@ async function loadAdminData() {
 }
 
 function setRoomView(view) {
-  if (view === "admin" && (currentUser?.role !== "admin" || currentUser.username !== "Cricket")) return;
+  if (view === "admin" && currentUser?.role !== "admin") return;
   activeView = view;
   const showChat = view === "chat";
   const showDms = view === "dms";
