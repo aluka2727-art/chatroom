@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7f3">
+  <title>PIGIN</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <main class="login-screen" id="loginScreen">
+      <section class="login-panel" aria-labelledby="loginTitle">
+        <div class="login-mark" aria-hidden="true">p.</div>
+        <h1 id="loginTitle">Enter the room</h1>
+        <p class="login-copy" id="loginCopy">Create an account with a password. We’ll give you an animal name.</p>
+        <div class="auth-mode" role="group" aria-label="Account mode">
+          <button class="active" id="createMode" type="button" data-mode="create" aria-pressed="true">Create account</button>
+          <button id="signInMode" type="button" data-mode="signin" aria-pressed="false">Sign in</button>
+        </div>
+        <form id="accountForm" data-mode="create">
+          <div class="auth-fields">
+            <div class="field-group" id="usernameGroup" hidden>
+              <label class="field-label" for="usernameInput">Animal username</label>
+              <input class="auth-input" id="usernameInput" type="text" autocomplete="username" autocapitalize="words" pattern="[A-Za-z]+" maxlength="20" placeholder="Otter">
+            </div>
+            <div class="field-group">
+              <label class="field-label" for="passwordInput">Password</label>
+              <input class="auth-input" id="passwordInput" type="password" autocomplete="new-password" minlength="8" required>
+            </div>
+            <div class="field-group" id="confirmGroup">
+              <label class="field-label" for="confirmInput">Confirm password</label>
+              <input class="auth-input" id="confirmInput" type="password" autocomplete="new-password" minlength="8" required>
+            </div>
+          </div>
+          <p class="auth-error" id="authError" role="alert" hidden></p>
+          <button class="login-submit" id="authSubmit" type="submit">Create account</button>
+        </form>
+        <p class="login-note">Your account and chat history are stored on the room server and available across devices.</p>
+      </section>
+    </main>
+    <main class="room" id="room" hidden>
+      <section class="room-heading" aria-labelledby="roomTitle">
+        <div class="room-heading-bar">
+          <div>
+            <h1 id="roomTitle">PIGIN</h1>
+            <p class="room-subtitle">Chat Room</p>
+          </div>
+          <div class="account-controls">
+            <span class="animal-name" id="animalName"></span>
+            <button class="switch-account" id="switchAccount" type="button">Sign out</button>
+          </div>
+        </div>
+      </section>
+      <p class="account-created" id="accountCreatedNotice" role="status" aria-live="polite" hidden></p>
+      <section class="feed" id="feed" aria-label="Chat messages" aria-live="polite"></section>
+      <div class="composer-wrap">
+        <form class="composer" id="messageForm">
+          <textarea id="messageInput" maxlength="500" rows="1" placeholder="Message the room..." aria-label="Write a message"></textarea>
+          <div class="composer-bottom">
+            <button class="emoji-button" type="button" id="emojiButton" title="Add a smile" aria-label="Add a smile">☺</button>
+            <button class="send-button" id="sendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
+          </div>
+        </form>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
