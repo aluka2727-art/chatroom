@@ -914,3 +914,953 @@ chatForm.addEventListener("submit", async (event) => {
   replyPreview.hidden = true;
 });
 ```
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101116">
+
+  <title>Chat</title>
+
+  <link rel="stylesheet" href="./style.css">
+  <link rel="manifest" href="./manifest.json">
+</head>
+
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>Chat</h1>
+        <p id="connection-status">Connecting...</p>
+      </div>
+
+      <button id="notifications-button">
+        🔔 Enable notifications
+      </button>
+    </header>
+
+    <section id="login-panel" class="panel">
+      <h2>Join the chat</h2>
+
+      <form id="login-form">
+        <input
+          id="email"
+          type="email"
+          placeholder="Email address"
+          autocomplete="email"
+          required
+        >
+
+        <input
+          id="password"
+          type="password"
+          placeholder="Password"
+          autocomplete="current-password"
+          minlength="6"
+          required
+        >
+
+        <input
+          id="display-name"
+          type="text"
+          placeholder="Display name (for registration)"
+          maxlength="40"
+        >
+
+        <div class="login-buttons">
+          <button type="submit" id="login-button">Sign in</button>
+          <button type="button" id="register-button">Create account</button>
+        </div>
+      </form>
+
+      <p id="auth-error" role="alert"></p>
+    </section>
+
+    <section id="chat-panel" hidden>
+      <div class="chat-heading">
+        <span id="current-user"></span>
+        <button id="logout-button">Sign out</button>
+      </div>
+
+      <main id="messages" aria-live="polite"></main>
+
+      <div id="reply-preview" hidden>
+        <div>
+          <strong>Replying to</strong>
+          <div id="reply-preview-text"></div>
+        </div>
+
+        <button id="cancel-reply" type="button" aria-label="Cancel reply">
+          ✕
+        </button>
+      </div>
+
+      <form id="chat-form">
+        <textarea
+          id="message-input"
+          placeholder="Write a message..."
+          maxlength="4000"
+          rows="2"
+          required
+        ></textarea>
+
+        <button id="send-button" type="submit">Send</button>
+      </form>
+
+      <p class="hint">Hover over a message to reply.</p>
+    </section>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
+```
+```css
+:root {
+  color-scheme: dark;
+  --background: #101116;
+  --panel: #191a22;
+  --message: #242630;
+  --border: #343642;
+  --accent: #647cff;
+  --text: #f5f5f7;
+  --muted: #a6a8b5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #12131a;
+  color: var(--text);
+}
+
+.app {
+  width: min(900px, 100%);
+  min-height: 100dvh;
+  margin: auto;
+  padding: 16px;
+}
+
+.topbar,
+.chat-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.topbar {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+#connection-status,
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 0;
+}
+
+.panel {
+  max-width: 420px;
+  margin: 48px auto;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+#login-form {
+  display: grid;
+  gap: 12px;
+}
+
+.login-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.login-buttons button {
+  flex: 1;
+}
+
+#auth-error {
+  color: #ff9696;
+  margin-top: 12px;
+}
+
+#chat-panel {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 120px);
+  min-height: 400px;
+}
+
+#chat-panel[hidden] {
+  display: none;
+}
+
+.chat-heading {
+  padding: 12px 0;
+}
+
+#messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 0;
+  min-height: 0;
+  scroll-behavior: smooth;
+}
+
+.message {
+  position: relative;
+  margin: 12px 0;
+  padding: 12px;
+  background: var(--message);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+
+.message:hover,
+.message:focus-within {
+  border-color: var(--border);
+}
+
+.message-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.username {
+  font-weight: 700;
+}
+
+.timestamp {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.message-text {
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.reply-button {
+  display: none;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 6px 10px;
+  background: #393d50;
+}
+
+.message:hover .reply-button,
+.message:focus-within .reply-button {
+  display: block;
+}
+
+.reply-quote {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #171923;
+  border-left: 3px solid var(--accent);
+  margin-bottom: 10px;
+  padding: 9px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+#reply-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+#reply-preview[hidden] {
+  display: none;
+}
+
+#reply-preview-text {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+#chat-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+#message-input {
+  resize: vertical;
+  min-height: 44px;
+  max-height: 140px;
+}
+
+.hint {
+  padding-top: 8px;
+}
+
+@media (hover: none) {
+  .reply-button {
+    display: inline-block;
+    position: static;
+    margin-top: 10px;
+  }
+}
+
+@media (max-width: 520px) {
+  .app {
+    padding: 10px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  #notifications-button {
+    width: 100%;
+  }
+
+  #chat-panel {
+    height: calc(100dvh - 160px);
+  }
+
+  #chat-form {
+    gap: 6px;
+  }
+
+  #send-button {
+    padding: 10px;
+  }
+}
+```
+```javascript
+import { initializeApp } from
+  "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+
+import {
+  getAuth,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  onAuthStateChanged,
+  updateProfile,
+  signOut
+} from
+  "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+import {
+  getFirestore,
+  collection,
+  addDoc,
+  doc,
+  getDoc,
+  setDoc,
+  query,
+  orderBy,
+  onSnapshot,
+  serverTimestamp
+} from
+  "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+import {
+  getMessaging,
+  getToken,
+  onMessage,
+  isSupported
+} from
+  "https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging.js";
+
+/*
+  Replace these placeholders with your Firebase project settings.
+  Firebase Console -> Project settings -> Your apps.
+*/
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_STORAGE_BUCKET",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+
+// Replace with the PUBLIC Web Push certificate key from Firebase.
+const VAPID_PUBLIC_KEY = "YOUR_PUBLIC_VAPID_KEY";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+let messaging = null;
+
+try {
+  if (await isSupported()) {
+    messaging = getMessaging(app);
+  }
+} catch (error) {
+  console.warn("Push messaging unavailable:", error);
+}
+
+const $ = (id) => document.getElementById(id);
+
+const loginPanel = $("login-panel");
+const chatPanel = $("chat-panel");
+const loginForm = $("login-form");
+const messagesEl = $("messages");
+const chatForm = $("chat-form");
+const input = $("message-input");
+const replyPreview = $("reply-preview");
+const replyPreviewText = $("reply-preview-text");
+const authError = $("auth-error");
+const status = $("connection-status");
+
+let currentUser = null;
+let replyingTo = null;
+let stopMessages = null;
+let messageCache = new Map();
+let submitting = false;
+
+function setStatus(message) {
+  status.textContent = message;
+}
+
+function showError(error) {
+  console.error(error);
+  authError.textContent = error.message || "Something went wrong.";
+}
+
+function clearReply() {
+  replyingTo = null;
+  replyPreview.hidden = true;
+  replyPreviewText.textContent = "";
+}
+
+function selectReply(id, message) {
+  replyingTo = {
+    id,
+    uid: message.uid,
+    username: message.username,
+    text: message.text
+  };
+
+  replyPreviewText.textContent =
+    `${message.username}: ${message.text}`;
+
+  replyPreview.hidden = false;
+  input.focus();
+}
+
+function jumpToMessage(id) {
+  const target = messagesEl.querySelector(
+    `[data-message-id="${CSS.escape(id)}"]`
+  );
+
+  if (!target) {
+    alert("The original message isn't currently loaded.");
+    return;
+  }
+
+  target.scrollIntoView({
+    behavior: "smooth",
+    block: "center"
+  });
+
+  target.animate(
+    [
+      { outline: "2px solid #647cff" },
+      { outline: "2px solid transparent" }
+    ],
+    { duration: 1000 }
+  );
+}
+
+function renderMessage(id, message) {
+  const article = document.createElement("article");
+  article.className = "message";
+  article.dataset.messageId = id;
+
+  if (message.replyTo) {
+    const quote = document.createElement("button");
+    quote.type = "button";
+    quote.className = "reply-quote";
+
+    quote.textContent =
+      `↩ ${message.replyTo.username}: ${message.replyTo.text}`;
+
+    quote.addEventListener("click", () => {
+      jumpToMessage(message.replyTo.id);
+    });
+
+    article.appendChild(quote);
+  }
+
+  const header = document.createElement("div");
+  header.className = "message-header";
+
+  const username = document.createElement("span");
+  username.className = "username";
+  username.textContent = message.username || "User";
+
+  const time = document.createElement("span");
+  time.className = "timestamp";
+
+  if (message.createdAt?.toDate) {
+    time.textContent = message.createdAt.toDate().toLocaleTimeString(
+      [],
+      { hour: "numeric", minute: "2-digit" }
+    );
+  }
+
+  header.append(username, time);
+
+  const body = document.createElement("p");
+  body.className = "message-text";
+  body.textContent = message.text || "";
+
+  const replyButton = document.createElement("button");
+  replyButton.type = "button";
+  replyButton.className = "reply-button";
+  replyButton.textContent = "↩ Reply";
+  replyButton.setAttribute(
+    "aria-label",
+    `Reply to ${message.username || "user"}`
+  );
+
+  replyButton.addEventListener("click", () => {
+    selectReply(id, message);
+  });
+
+  article.append(header, body, replyButton);
+  return article;
+}
+
+function subscribeToMessages() {
+  if (stopMessages) stopMessages();
+
+  const q = query(
+    collection(db, "messages"),
+    orderBy("createdAt", "asc")
+  );
+
+  stopMessages = onSnapshot(
+    q,
+    (snapshot) => {
+      const wasNearBottom =
+        messagesEl.scrollHeight -
+        messagesEl.scrollTop -
+        messagesEl.clientHeight < 100;
+
+      messageCache.clear();
+      messagesEl.replaceChildren();
+
+      snapshot.forEach((item) => {
+        const data = item.data();
+        messageCache.set(item.id, data);
+        messagesEl.appendChild(renderMessage(item.id, data));
+      });
+
+      if (wasNearBottom) {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      setStatus("Connected");
+    },
+    (error) => {
+      console.error("Message listener failed:", error);
+      setStatus("Unable to load messages");
+    }
+  );
+}
+
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  authError.textContent = "";
+
+  try {
+    await signInWithEmailAndPassword(
+      auth,
+      $("email").value.trim(),
+      $("password").value
+    );
+  } catch (error) {
+    showError(error);
+  }
+});
+
+$("register-button").addEventListener("click", async () => {
+  authError.textContent = "";
+
+  const email = $("email").value.trim();
+  const password = $("password").value;
+  const displayName = $("display-name").value.trim();
+
+  if (!displayName) {
+    authError.textContent = "Enter a display name to register.";
+    return;
+  }
+
+  try {
+    const credential = await createUserWithEmailAndPassword(
+      auth,
+      email,
+      password
+    );
+
+    await updateProfile(credential.user, {
+      displayName
+    });
+
+    await setDoc(
+      doc(db, "users", credential.user.uid),
+      {
+        displayName,
+        createdAt: serverTimestamp()
+      }
+    );
+  } catch (error) {
+    showError(error);
+  }
+});
+
+$("logout-button").addEventListener("click", async () => {
+  clearReply();
+
+  if (stopMessages) {
+    stopMessages();
+    stopMessages = null;
+  }
+
+  try {
+    await signOut(auth);
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+$("cancel-reply").addEventListener("click", clearReply);
+
+chatForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  if (!currentUser || submitting) return;
+
+  const text = input.value.trim();
+  if (!text) return;
+
+  submitting = true;
+  $("send-button").disabled = true;
+
+  const reply = replyingTo ? { ...replyingTo } : null;
+
+  try {
+    await addDoc(collection(db, "messages"), {
+      text,
+      uid: currentUser.uid,
+      username: currentUser.displayName || "User",
+      replyTo: reply,
+      createdAt: serverTimestamp()
+    });
+
+    input.value = "";
+    clearReply();
+  } catch (error) {
+    alert("Message failed to send. Please try again.");
+    console.error(error);
+  } finally {
+    submitting = false;
+    $("send-button").disabled = false;
+    input.focus();
+  }
+});
+
+$("notifications-button").addEventListener("click", async () => {
+  try {
+    if (!currentUser) {
+      alert("Sign in before enabling notifications.");
+      return;
+    }
+
+    if (!messaging || !("Notification" in window)) {
+      alert("Push notifications aren't supported in this browser.");
+      return;
+    }
+
+    if (!("serviceWorker" in navigator)) {
+      alert("This browser doesn't support service workers.");
+      return;
+    }
+
+    const permission = await Notification.requestPermission();
+
+    if (permission !== "granted") {
+      alert("Allow notifications in your browser settings.");
+      return;
+    }
+
+    const registration = await navigator.serviceWorker.register(
+      "./firebase-messaging-sw.js"
+    );
+
+    const token = await getToken(messaging, {
+      vapidKey: VAPID_PUBLIC_KEY,
+      serviceWorkerRegistration: registration
+    });
+
+    if (!token) {
+      throw new Error("Couldn't register this device.");
+    }
+
+    // Each device gets a separate token document.
+    await setDoc(
+      doc(db, "users", currentUser.uid, "pushTokens", token),
+      {
+        token,
+        updatedAt: serverTimestamp()
+      }
+    );
+
+    alert("Notifications enabled on this device!");
+  } catch (error) {
+    console.error(error);
+    alert("Could not enable notifications: " + error.message);
+  }
+});
+
+onAuthStateChanged(auth, (user) => {
+  currentUser = user;
+
+  if (!user) {
+    if (stopMessages) {
+      stopMessages();
+      stopMessages = null;
+    }
+
+    loginPanel.hidden = false;
+    chatPanel.hidden = true;
+    messagesEl.replaceChildren();
+    messageCache.clear();
+    clearReply();
+    setStatus("Sign in to chat");
+    return;
+  }
+
+  loginPanel.hidden = true;
+  chatPanel.hidden = false;
+
+  $("current-user").textContent =
+    `Signed in as ${user.displayName || user.email}`;
+
+  subscribeToMessages();
+});
+
+if (messaging) {
+  onMessage(messaging, (payload) => {
+    // The chat is open. Display a nonintrusive in-page notice.
+    const title = payload.notification?.title || "New message";
+    setStatus(title);
+  });
+}
+```
+importScripts(
+  "https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"
+);
+
+importScripts(
+  "https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"
+);
+
+firebase.initializeApp({
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_STORAGE_BUCKET",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID"
+});
+
+const messaging = firebase.messaging();
+
+messaging.onBackgroundMessage((payload) => {
+  const notification = payload.notification || {};
+
+  self.registration.showNotification(
+    notification.title || "New chat message",
+    {
+      body: notification.body || "You received a new message.",
+      icon: "./icon.png",
+      data: { url: "./" },
+      tag: "chat-message"
+    }
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  const target = new URL(
+    event.notification.data?.url || "./",
+    self.location.origin
+  );
+
+  if (target.origin !== self.location.origin) return;
+
+  event.waitUntil(clients.openWindow(target.href));
+});
+{
+  "name": "Chat",
+  "short_name": "Chat",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#101116",
+  "theme_color": "#101116",
+  "icons": [
+    {
+      "src": "./icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}
+{
+  "name": "chat-notification-functions",
+  "private": true,
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^6.0.0"
+  }
+}
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { initializeApp } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
+const { getMessaging } = require("firebase-admin/messaging");
+
+initializeApp();
+
+const db = getFirestore();
+
+exports.notifyNewMessage = onDocumentCreated(
+  "messages/{messageId}",
+  async (event) => {
+    const message = event.data?.data();
+
+    if (!message || !message.uid || !message.text) return;
+
+    // This simple example targets other registered users.
+    // For private chats, replace this with the authenticated
+    // conversation's actual participant list.
+    const users = await db.collection("users").get();
+
+    const tokens = [];
+
+    for (const user of users.docs) {
+      if (user.id === message.uid) continue;
+
+      const tokenDocs = await db
+        .collection("users")
+        .doc(user.id)
+        .collection("pushTokens")
+        .get();
+
+      for (const tokenDoc of tokenDocs.docs) {
+        const token = tokenDoc.data().token;
+
+        if (token) {
+          tokens.push({
+            token,
+            ref: tokenDoc.ref
+          });
+        }
+      }
+    }
+
+    if (tokens.length === 0) return;
+
+    const response = await getMessaging().sendEachForMulticast({
+      tokens: tokens.map((item) => item.token),
+      notification: {
+        title: `New message from ${message.username || "User"}`,
+        body: message.text.slice(0, 150)
+      },
+      webpush: {
+        fcmOptions: {
+          link: "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPOSITORY/"
+        }
+      }
+    });
+
+    const deletions = [];
+
+    response.responses.forEach((result, index) => {
+      if (
+        !result.success &&
+        (
+          result.error?.code === "messaging/registration-token-not-registered" ||
+          result.error?.code === "messaging/invalid-registration-token"
+        )
+      ) {
+        deletions.push(tokens[index].ref.delete());
+      }
+    });
+
+    await Promise.all(deletions);
+  }
+);
