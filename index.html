@@ -8,8 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='footer-20261028') }}">
-  <script src="{{ url_for('static', filename='app.js', v='feed-bottom-20261028') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='admin-tombstones-20261028') }}">
+  <script src="{{ url_for('static', filename='app.js', v='admin-tombstones-20261028') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -56,19 +56,52 @@
           </div>
         </div>
       </section>
-      <p class="account-created" id="accountCreatedNotice" role="status" aria-live="polite" hidden></p>
-      <section class="feed" id="feed" aria-label="Chat messages" aria-live="polite"></section>
-      <div class="composer-wrap">
-        <form class="composer" id="messageForm">
-          <textarea id="messageInput" maxlength="500" rows="1" placeholder="Message the room..." aria-label="Write a message"></textarea>
-          <div class="composer-bottom">
-            <button class="emoji-button" type="button" id="emojiButton" title="Add a smile" aria-label="Add a smile">☺</button>
-            <button class="send-button" id="sendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
-          </div>
-        </form>
+      <div class="room-body">
+        <nav class="side-tabs" aria-label="Room views">
+          <button class="side-tab active" id="chatTab" type="button" aria-pressed="true">CHAT</button>
+          <button class="side-tab" id="adminTab" type="button" aria-pressed="false" hidden>ADMIN</button>
+        </nav>
+        <div class="room-views">
+          <section class="chat-view" id="chatView" aria-label="Chat">
+            <p class="account-created" id="accountCreatedNotice" role="status" aria-live="polite" hidden></p>
+            <section class="feed" id="feed" aria-label="Chat messages" aria-live="polite"></section>
+            <div class="composer-wrap">
+              <form class="composer" id="messageForm">
+                <textarea id="messageInput" maxlength="500" rows="1" placeholder="Message the room..." aria-label="Write a message"></textarea>
+                <div class="composer-bottom">
+                  <button class="emoji-button" type="button" id="emojiButton" title="Add a smile" aria-label="Add a smile">☺</button>
+                  <button class="send-button" id="sendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
+                </div>
+              </form>
+            </div>
+          </section>
+          <section class="admin-panel" id="adminPanel" aria-label="Admin controls" hidden>
+            <header class="admin-panel-heading">
+              <div><h2>Admin</h2><p>Manage accounts and messages</p></div>
+              <button class="admin-refresh" id="adminRefresh" type="button">Refresh</button>
+            </header>
+            <p class="admin-error" id="adminError" role="alert" hidden></p>
+            <section class="admin-section" aria-labelledby="accountsHeading">
+              <h3 id="accountsHeading">Accounts</h3>
+              <div class="admin-list" id="adminAccounts"></div>
+            </section>
+            <section class="admin-section" aria-labelledby="messagesHeading">
+              <h3 id="messagesHeading">Recent messages</h3>
+              <div class="admin-list" id="adminMessages"></div>
+            </section>
+          </section>
+        </div>
       </div>
     </main>
-    <footer class="app-footer">PIGIN v1.0.0</footer>
+    <div class="warning-screen" id="warningScreen" role="alertdialog" aria-modal="true" aria-labelledby="warningTitle" aria-describedby="warningText" hidden>
+      <section class="warning-panel">
+        <div class="login-mark warning-mark" aria-hidden="true">!</div>
+        <h2 id="warningTitle">Account notice</h2>
+        <p id="warningText"></p>
+        <button class="login-submit" id="warningAction" type="button">Continue</button>
+      </section>
+    </div>
+    <footer class="app-footer">v1.1.1</footer>
   </div>
 </body>
 </html>

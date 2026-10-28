@@ -26,7 +26,7 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"PIGIN v1.0.0", page.data)
+        self.assertIn(b"v1.1.1", page.data)
         self.assertIn(b"/static/app.js", page.data)
         self.assertEqual(script.status_code, 200)
         script.close()
@@ -45,6 +45,22 @@ class ChatroomTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201, response.json)
         return response.json["user"], response.json["csrf_token"]
+
+    def create_admin(self):
+        result = self.app.test_cli_runner().invoke(
+            args=["create-admin"],
+            input="admin-password-123\nadmin-password-123\n",
+        )
+        self.assertEqual(result.exit_code, 0, result.output)
+        client = self.app.test_client()
+        token = client.get("/api/session").json["csrf_token"]
+        response = client.post(
+            "/api/auth",
+            json={"mode": "signin", "username": "Cricket", "password": "admin-password-123"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        return client, response.json["csrf_token"]
 
     def test_users_share_messages_between_clients(self):
         first_user, first_token = self.create_account()
@@ -117,6 +133,77 @@ class ChatroomTests(unittest.TestCase):
         delete_result = self.app.test_cli_runner().invoke(args=["delete-user", "Cricket"])
         self.assertNotEqual(delete_result.exit_code, 0)
         self.assertIn("Admin accounts cannot be deleted", delete_result.output)
+
+    def test_only_admin_can_open_admin_api(self):
+        self.create_account()
+        response = self.client.get("/api/admin/accounts")
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_account_delete_tombstones_messages_and_releases_name(self):
+        admin_client, _admin_token = self.create_admin()
+        member_client = self.app.test_client()
+        member, member_token = self.create_account(member_client)
+        member_client.post(
+            "/api/messages",
+            json={"text": "This belongs to the deleted profile"},
+            headers={"X-CSRF-Token": member_token},
+        )
+        message_cursor = member_client.get("/api/messages").json["cursor"]
+        accounts = admin_client.get("/api/admin/accounts").json["accounts"]
+        member_account = next(account for account in accounts if account["username"] == member["username"])
+        admin_token = admin_client.get("/api/session").json["csrf_token"]
+
+        deleted = admin_client.delete(
+            f"/api/admin/accounts/{member_account['id']}",
+            headers={"X-CSRF-Token": admin_token},
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.json)
+        with patch("app.secrets.choice", return_value=member["username"]):
+            replacement, _replacement_token = self.create_account(self.app.test_client())
+        self.assertEqual(replacement["username"], member["username"])
+
+        retained = admin_client.get(f"/api/messages?after={message_cursor}").json["messages"]
+        self.assertEqual(retained[0]["username"], "[DELETED]")
+        self.assertEqual(retained[0]["text"], "[DELETED]")
+        self.assertNotEqual(replacement["id"], member["id"])
+        deleted_session = member_client.get("/api/messages")
+        self.assertEqual(deleted_session.status_code, 410)
+        self.assertTrue(deleted_session.json["account_deleted"])
+        session_status = member_client.get("/api/session")
+        self.assertTrue(session_status.json["account_deleted"])
+        self.assertEqual(session_status.json["deleted_username"], member["username"])
+
+    def test_admin_message_delete_warns_author_and_keeps_account(self):
+        admin_client, _admin_token = self.create_admin()
+        member_client = self.app.test_client()
+        member, member_token = self.create_account(member_client)
+        initial = member_client.get("/api/messages").json
+        member_client.post(
+            "/api/messages",
+            json={"text": "This message alone will be deleted"},
+            headers={"X-CSRF-Token": member_token},
+        )
+        message = admin_client.get("/api/admin/messages").json["messages"][0]
+        admin_token = admin_client.get("/api/session").json["csrf_token"]
+        deleted = admin_client.delete(
+            f"/api/admin/messages/{message['id']}",
+            headers={"X-CSRF-Token": admin_token},
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.json)
+
+        update = member_client.get(f"/api/messages?after={initial['cursor']}").json
+        self.assertEqual(update["warnings"], 1)
+        self.assertEqual(update["messages"][0]["username"], member["username"])
+        self.assertEqual(update["messages"][0]["text"], "[DELETED]")
+        status = member_client.get("/api/session").json
+        self.assertEqual(status["user"]["username"], member["username"])
+
+        acknowledgement = member_client.post(
+            "/api/warnings/acknowledge",
+            headers={"X-CSRF-Token": status["csrf_token"]},
+        )
+        self.assertEqual(acknowledgement.status_code, 200)
+        self.assertEqual(member_client.get("/api/session").json["user"]["warning_count"], 0)
 
     def test_mutations_require_csrf_token(self):
         response = self.client.post("/api/auth", json={"mode": "create"})

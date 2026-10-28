@@ -102,6 +102,13 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .switch-account { padding: 5px 0; border: 0; background: transparent; color: #819087; cursor: pointer; font-size: 10px; }
 .switch-account:hover { color: var(--green); }
 .account-created { margin-top: 12px; padding: 10px 12px; border-left: 3px solid var(--lime); background: #edf3df; color: #355342; font-size: 12px; }
+.room-body { min-height: 0; flex: 1; display: grid; grid-template-columns: 58px minmax(0, 1fr); }
+.side-tabs { display: flex; flex-direction: column; gap: 7px; padding: 14px 7px; border-right: 1px solid var(--line); }
+.side-tab { min-height: 64px; padding: 9px 5px; border: 0; border-radius: 4px; background: transparent; color: #89938b; cursor: pointer; font: 700 9px "Space Grotesk", sans-serif; writing-mode: vertical-rl; transform: rotate(180deg); }
+.side-tab:hover { background: #edf0e9; color: var(--ink); }
+.side-tab.active { background: #e8eee4; color: var(--green); }
+.room-views { min-width: 0; min-height: 0; }
+.chat-view, .admin-panel { width: 100%; height: 100%; min-height: 0; display: flex; flex-direction: column; }
 .feed {
   min-height: 0;
   flex: 1;
@@ -162,6 +169,28 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .send-button { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 4px; background: var(--green); color: #fff; font-size: 11px; font-weight: 600; }
 .send-button:hover:not(:disabled) { background: #173f33; }
 .send-button:disabled { cursor: default; opacity: .42; }
+.admin-panel { overflow: auto; padding: 20px 22px; }
+.admin-panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.admin-panel-heading h2 { margin: 0; font: 600 20px "Space Grotesk", sans-serif; }
+.admin-panel-heading p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+.admin-refresh { padding: 7px 10px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); cursor: pointer; font-size: 10px; }
+.admin-section { margin-top: 20px; }
+.admin-section h3 { margin: 0 0 8px; color: #77827a; font-size: 10px; letter-spacing: .8px; text-transform: uppercase; }
+.admin-list { border-top: 1px solid var(--line); }
+.admin-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
+.admin-row-copy { min-width: 0; }
+.admin-row-title { color: var(--ink); font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
+.admin-row-detail { margin-top: 3px; color: #89938b; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.admin-row-action { padding: 6px 9px; border: 1px solid #e7c7c0; border-radius: 4px; background: #fff; color: #984338; cursor: pointer; font-size: 10px; }
+.admin-row-action:hover:not(:disabled) { background: #fbefec; }
+.admin-row-action:disabled { cursor: default; opacity: .45; }
+.admin-empty { padding: 12px 0; color: #89938b; font-size: 11px; }
+.admin-error { padding: 9px 11px; margin: 12px 0 0; border-left: 3px solid #c75c4d; background: #fbefec; color: #86372d; font-size: 11px; }
+.warning-screen { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgba(24, 34, 31, .62); }
+.warning-panel { width: min(420px, 100%); padding: 28px; border: 1px solid var(--line); border-radius: 6px; background: #fff; box-shadow: 0 20px 70px #101a1640; }
+.warning-mark { display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 18px; border-radius: 50%; background: #f7e2bb; color: #684715; font: 700 18px "Space Grotesk", sans-serif; }
+.warning-panel h2 { margin: 0; font: 600 20px "Space Grotesk", sans-serif; }
+.warning-panel p { margin: 9px 0 16px; color: #5c6861; font-size: 13px; line-height: 1.55; }
 @keyframes arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 640px) {
   .shell { padding: 0 17px; grid-template-rows: 1fr; }
@@ -170,6 +199,12 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   .room-heading-bar { align-items: flex-start; }
   .account-controls { flex-direction: column; align-items: flex-end; gap: 3px; }
   .login-panel { padding: 26px 22px; }
+  .room-body { grid-template-columns: 46px minmax(0, 1fr); }
+  .side-tabs { padding: 10px 4px; }
+  .side-tab { min-height: 56px; padding: 7px 3px; font-size: 8px; }
+  .admin-panel { padding: 14px 10px; }
+  .admin-row { gap: 7px; }
+  .admin-row-action { padding: 6px; }
   .feed { padding-right: 6px; padding-left: 6px; }
   .message { grid-template-columns: 32px minmax(0, 1fr); gap: 10px; padding: 8px 6px; margin: 0; }
   .message-avatar { width: 32px; height: 32px; }
