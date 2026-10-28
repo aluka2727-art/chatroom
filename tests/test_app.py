@@ -121,6 +121,23 @@ class ChatroomTests(unittest.TestCase):
         response = self.client.post("/api/auth", json={"mode": "create"})
         self.assertEqual(response.status_code, 400)
 
+    def test_authentication_rotates_csrf_token(self):
+        stale_token = self.client.get("/api/session").json["csrf_token"]
+        _user, fresh_token = self.create_account()
+
+        stale_response = self.client.post(
+            "/api/messages",
+            json={"text": "This stale token must be rejected"},
+            headers={"X-CSRF-Token": stale_token},
+        )
+        fresh_response = self.client.post(
+            "/api/messages",
+            json={"text": "This fresh token should work"},
+            headers={"X-CSRF-Token": fresh_token},
+        )
+        self.assertEqual(stale_response.status_code, 400)
+        self.assertEqual(fresh_response.status_code, 201)
+
 
 if __name__ == "__main__":
     unittest.main()

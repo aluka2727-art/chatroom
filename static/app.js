@@ -9,18 +9,29 @@ const feed = document.querySelector("#feed");
 const messageInput = document.querySelector("#messageInput");
 const sendButton = document.querySelector("#sendButton");
 const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
+const authSubmit = document.querySelector("#authSubmit");
 let currentUser = null;
 let csrfToken = "";
 let lastMessageId = 0;
 let accountCreatedTimeout;
 let pollingTimer;
 
-async function api(path, options = {}) {
+async function api(path, options = {}, retryCsrf = true) {
+  const method = (options.method || "GET").toUpperCase();
+  if (method !== "GET" && !csrfToken) {
+    const sessionData = await api("/api/session");
+    csrfToken = sessionData.csrf_token;
+  }
   const headers = { Accept: "application/json", ...options.headers };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
-  if (options.method && options.method !== "GET") headers["X-CSRF-Token"] = csrfToken;
+  if (method !== "GET") headers["X-CSRF-Token"] = csrfToken;
   const response = await fetch(path, { ...options, headers, credentials: "same-origin", cache: "no-store" });
   const data = await response.json().catch(() => ({}));
+  if (response.status === 400 && method !== "GET" && retryCsrf && data.error === "The request expired. Refresh and try again.") {
+    const sessionData = await api("/api/session");
+    csrfToken = sessionData.csrf_token;
+    return api(path, options, false);
+  }
   if (!response.ok) {
     const error = new Error(data.error || "The request could not be completed.");
     error.status = response.status;
@@ -138,9 +149,11 @@ async function loadMessages() {
 }
 
 async function initialize() {
+  authSubmit.disabled = true;
   try {
     const data = await api("/api/session");
     csrfToken = data.csrf_token;
+    authSubmit.disabled = false;
     if (data.user) showRoom(data.user);
     else setAuthMode("create");
   } catch {
@@ -154,8 +167,7 @@ document.querySelector("#signInMode").addEventListener("click", () => setAuthMod
 accountForm.addEventListener("submit", async event => {
   event.preventDefault();
   authError.hidden = true;
-  const submitButton = document.querySelector("#authSubmit");
-  submitButton.disabled = true;
+  authSubmit.disabled = true;
   try {
     const mode = accountForm.dataset.mode;
     const data = await api("/api/auth", {
@@ -174,7 +186,7 @@ accountForm.addEventListener("submit", async event => {
     authError.textContent = error.message;
     authError.hidden = false;
   } finally {
-    submitButton.disabled = false;
+    authSubmit.disabled = false;
   }
 });
 
