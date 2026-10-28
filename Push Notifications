@@ -1,0 +1,42 @@
+```javascript
+importScripts(
+  "https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"
+);
+importScripts(
+  "https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"
+);
+
+firebase.initializeApp({
+  apiKey: "YOUR_FIREBASE_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.firebasestorage.app",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+});
+
+const messaging = firebase.messaging();
+
+messaging.onBackgroundMessage((payload) => {
+  const title = payload.notification?.title || "New Chat Message";
+
+  self.registration.showNotification(title, {
+    body: payload.notification?.body || "You received a new message!",
+    icon: "/icon.png",
+    data: { url: "/" }
+  });
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  const target = new URL(
+    event.notification.data?.url || "/",
+    self.location.origin
+  );
+
+  if (target.origin === self.location.origin) {
+    event.waitUntil(clients.openWindow(target.href));
+  }
+});
+```
