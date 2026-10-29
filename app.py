@@ -361,6 +361,14 @@ def create_app(test_config=None):
         response.headers["Cache-Control"] = "no-cache"
         return response
 
+    @app.get("/manifest.webmanifest")
+    def web_manifest():
+        return send_from_directory(
+            app.static_folder,
+            "manifest.webmanifest",
+            mimetype="application/manifest+json",
+        )
+
     @app.get("/api/session")
     def api_session():
         database = get_db()

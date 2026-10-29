@@ -44,6 +44,7 @@ let accountCreatedTimeout;
 let pollingTimer;
 let warningKind = null;
 let pendingDmPartnerId = null;
+let pushHint = "";
 
 async function api(path, options = {}, retryCsrf = true) {
   const method = (options.method || "GET").toUpperCase();
@@ -652,23 +653,38 @@ function clearDmDeepLink() {
   window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
+function isIos() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function isHomeScreenApp() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+
 function resetPushToggle() {
+  pushHint = "";
   pushToggle.disabled = true;
+  pushToggle.dataset.state = "";
   pushToggle.setAttribute("aria-pressed", "false");
   pushToggle.textContent = "Enable notifications";
   delete pushToggle.dataset.publicKey;
 }
 
-function setPushToggle(state) {
+function setPushToggle(state, hint = "") {
   const labels = {
     unavailable: "Notifications unavailable",
+    install: "Add to Home Screen",
     blocked: "Notifications blocked",
     off: "Enable notifications",
     on: "Notifications on",
   };
-  pushToggle.disabled = state !== "on" && state !== "off";
+  pushHint = hint;
+  pushToggle.dataset.state = state;
+  pushToggle.disabled = state !== "on" && state !== "off" && state !== "install";
   pushToggle.setAttribute("aria-pressed", String(state === "on"));
   pushToggle.textContent = labels[state];
+  if (activeView === "dms") showDmError(hint);
 }
 
 function urlBase64ToUint8Array(value) {
@@ -681,26 +697,37 @@ function urlBase64ToUint8Array(value) {
 }
 
 async function refreshPushToggle() {
-  if (!currentUser || !("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
-    setPushToggle("unavailable");
+  if (!currentUser) {
+    resetPushToggle();
+    return;
+  }
+  if (isIos() && !isHomeScreenApp()) {
+    setPushToggle("install", "iPhone only delivers these alerts from the Home Screen. In Safari, tap Share, then Add to Home Screen. Open PIGIN from that icon and tap Enable notifications.");
+    return;
+  }
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    const hint = isIos()
+      ? "Remove the PIGIN icon from your Home Screen, add it again from Safari, then open PIGIN from that icon."
+      : "Notifications are unavailable in this browser.";
+    setPushToggle("unavailable", hint);
     return;
   }
   if (Notification.permission === "denied") {
-    setPushToggle("blocked");
+    setPushToggle("blocked", "Notification permission was denied. Allow notifications for PIGIN in your phone settings.");
     return;
   }
   try {
     const config = await api("/api/push/config");
     if (!config.enabled || !config.public_key) {
-      setPushToggle("unavailable");
+      setPushToggle("unavailable", "Notifications are not configured on this server yet.");
       return;
     }
     pushToggle.dataset.publicKey = config.public_key;
     const registration = await navigator.serviceWorker.register("/sw.js");
     const subscription = await registration.pushManager.getSubscription();
     setPushToggle(subscription ? "on" : "off");
-  } catch {
-    setPushToggle("unavailable");
+  } catch (error) {
+    setPushToggle("unavailable", error.message || "Notifications are unavailable in this browser.");
   }
 }
 
@@ -723,6 +750,10 @@ async function disablePushSubscription() {
 
 async function togglePushNotifications() {
   if (!currentUser || pushToggle.disabled) return;
+  if (pushToggle.dataset.state === "install") {
+    showDmError(pushHint);
+    return;
+  }
   pushToggle.disabled = true;
   try {
     const registration = await navigator.serviceWorker.register("/sw.js");
@@ -776,7 +807,7 @@ function setRoomView(view) {
   adminTab.classList.toggle("active", showAdmin);
   adminTab.setAttribute("aria-pressed", String(showAdmin));
   if (showDms) {
-    showDmError("");
+    showDmError(pushHint);
     loadDmContacts();
     loadDmMessages();
   }

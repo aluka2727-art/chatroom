@@ -30,14 +30,20 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.3.1", page.data)
+        self.assertIn(b"v1.4.1", page.data)
         self.assertIn(b"/static/app.js", page.data)
         self.assertIn(b"id=\"replyPreview\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
+        self.assertIn(b"/manifest.webmanifest", page.data)
         self.assertEqual(script.status_code, 200)
         self.assertIn(b"/api/push/subscriptions", script.data)
         self.assertIn(b"/sw.js", script.data)
+        self.assertIn(b"Add to Home Screen", script.data)
         script.close()
+        manifest = self.client.get("/manifest.webmanifest")
+        self.assertEqual(manifest.status_code, 200)
+        self.assertIn("application/manifest+json", manifest.content_type)
+        self.assertIn(b'"display": "standalone"', manifest.data)
 
     def create_account(self, client=None):
         client = client or self.client

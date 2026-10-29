@@ -30,7 +30,7 @@ flask --app app create-admin
 
 The command prompts for Cricket's password without echoing it. Use at least 8 characters. Local SQLite data is stored in `chatroom.sqlite3` unless `CHATROOM_DATABASE` is set.
 
-Direct-message alerts use browser push. The first time a signed-in member opens the DMS tab, the app writes `vapid_private.pem` and `vapid_public.txt` next to the database. Leave those files on the server and out of git. Members turn alerts on with **Enable notifications** in the DMS tab. To supply keys yourself, set `CHATROOM_VAPID_PUBLIC_KEY` to the URL-safe base64 application server key, `CHATROOM_VAPID_PRIVATE_KEY_FILE` to the private PEM path, and `CHATROOM_VAPID_SUBJECT` to a `mailto:` address for this site.
+Direct-message alerts use browser push. The first time a signed-in member opens the DMS tab, the app writes `vapid_private.pem` and `vapid_public.txt` next to the database. Leave those files on the server and out of git. Members turn alerts on with **Enable notifications** in the DMS tab. On an iPhone, add the site to the Home Screen from Safari and open PIGIN from that icon before enabling alerts. To supply keys yourself, set `CHATROOM_VAPID_PUBLIC_KEY` to the URL-safe base64 application server key, `CHATROOM_VAPID_PRIVATE_KEY_FILE` to the private PEM path, and `CHATROOM_VAPID_SUBJECT` to a `mailto:` address for this site.
 
 To rename an existing account and promote it to admin, back up the database, then run `flask --app app promote-admin Reindeer --rename-to Viper` with the same database settings the app uses. This keeps the account ID and its message history.
 
