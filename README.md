@@ -8,6 +8,8 @@ The app has a 100-account limit. `Cricket` is reserved for the initial admin acc
 
 The **DMS** side tab lets signed-in users start private conversations with other active accounts. Direct messages are visible only to their sender and recipient and are removed if either account is deleted.
 
+In the room chat, select **Reply** on a message to quote it in your next message. If the original message is deleted, its quote is shown as `[DELETED]`.
+
 When signed in as an admin, the **ADMIN** side tab can delete member accounts or individual messages. Deleted accounts' room messages and individually deleted room messages remain as `[DELETED]`; usernames freed by account deletion can be reused. Affected active users receive a blocking warning screen.
 
 ## Run locally

@@ -8,6 +8,9 @@ const room = document.querySelector("#room");
 const feed = document.querySelector("#feed");
 const messageInput = document.querySelector("#messageInput");
 const sendButton = document.querySelector("#sendButton");
+const replyPreview = document.querySelector("#replyPreview");
+const replyPreviewText = document.querySelector("#replyPreviewText");
+const messageError = document.querySelector("#messageError");
 const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
@@ -28,6 +31,7 @@ const dmSendButton = document.querySelector("#dmSendButton");
 let currentUser = null;
 let csrfToken = "";
 let messageCursor = 0;
+let replyingTo = null;
 let selectedDmUser = null;
 let dmMessageCursor = 0;
 let dmContactsSnapshot = "";
@@ -87,6 +91,8 @@ function showLogin() {
   currentUser = null;
   messageCursor = 0;
   warningKind = null;
+  clearReply();
+  messageError.hidden = true;
   warningScreen.hidden = true;
   feed.replaceChildren();
   dmFeed.replaceChildren();
@@ -131,6 +137,8 @@ function showRoom(user) {
   passwordInput.value = "";
   confirmInput.value = "";
   messageCursor = 0;
+  clearReply();
+  messageError.hidden = true;
   feed.replaceChildren();
   dmFeed.replaceChildren();
   dmContacts.replaceChildren();
@@ -207,12 +215,50 @@ function addMessage(message) {
   text.className = "message-text";
   text.textContent = message.text;
 
+  if (message.reply_to) {
+    const quote = document.createElement("blockquote");
+    quote.className = "reply-quote";
+    const quoteAuthor = document.createElement("cite");
+    quoteAuthor.textContent = message.reply_to.username;
+    const quoteText = document.createElement("span");
+    quoteText.textContent = message.reply_to.text;
+    quote.append(quoteAuthor, quoteText);
+    content.append(quote);
+  }
+
   meta.append(author, time);
   content.append(meta, text);
+  if (!message.is_deleted && message.username !== "[DELETED]") {
+    const replyButton = document.createElement("button");
+    replyButton.className = "message-reply";
+    replyButton.type = "button";
+    replyButton.textContent = "Reply";
+    replyButton.setAttribute("aria-label", `Reply to ${message.username}'s message`);
+    replyButton.addEventListener("click", () => selectReply(message));
+    meta.append(replyButton);
+  }
   article.append(avatar, content);
   const existing = feed.querySelector(`[data-message-id="${message.id}"]`);
   if (existing) existing.replaceWith(article);
   else feed.append(article);
+}
+
+function selectReply(message) {
+  replyingTo = {
+    id: message.id,
+    username: message.username,
+    text: message.text,
+  };
+  replyPreviewText.textContent = `${replyingTo.username}: ${replyingTo.text}`;
+  replyPreview.hidden = false;
+  messageError.hidden = true;
+  messageInput.focus();
+}
+
+function clearReply() {
+  replyingTo = null;
+  replyPreview.hidden = true;
+  replyPreviewText.textContent = "";
 }
 
 function scrollToLatestMessage(behavior = "smooth", targetFeed = feed) {
@@ -635,16 +681,22 @@ messageInput.addEventListener("input", () => {
   sendButton.disabled = !messageInput.value.trim();
   messageInput.style.height = "auto";
   messageInput.style.height = `${Math.min(messageInput.scrollHeight, 110)}px`;
+  messageError.hidden = true;
 });
+document.querySelector("#cancelReply").addEventListener("click", clearReply);
 document.querySelector("#messageForm").addEventListener("submit", async event => {
   event.preventDefault();
   const text = messageInput.value.trim();
   if (!text || sendButton.disabled) return;
   sendButton.disabled = true;
   try {
-    await api("/api/messages", { method: "POST", body: JSON.stringify({ text }) });
+    const payload = { text };
+    if (replyingTo) payload.reply_to_id = replyingTo.id;
+    await api("/api/messages", { method: "POST", body: JSON.stringify(payload) });
     messageInput.value = "";
     messageInput.style.height = "34px";
+    clearReply();
+    messageError.hidden = true;
     await loadMessages();
     scrollToLatestMessage();
   } catch (error) {
@@ -652,6 +704,9 @@ document.querySelector("#messageForm").addEventListener("submit", async event =>
       showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
     } else if (error.status === 401) {
       showLogin();
+    } else {
+      messageError.textContent = error.message;
+      messageError.hidden = false;
     }
   } finally {
     sendButton.disabled = !messageInput.value.trim();

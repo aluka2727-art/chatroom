@@ -79,6 +79,7 @@ def create_app(test_config=None):
                 author_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
                 body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500),
                 is_deleted INTEGER NOT NULL DEFAULT 0,
+                reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
             CREATE INDEX IF NOT EXISTS messages_id_idx ON messages(id);
@@ -116,6 +117,10 @@ def create_app(test_config=None):
         }
         if "is_deleted" not in message_columns:
             database.execute("ALTER TABLE messages ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0")
+        if "reply_to_id" not in message_columns:
+            database.execute(
+                "ALTER TABLE messages ADD COLUMN reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL"
+            )
         database.executescript(
             """
             CREATE TRIGGER IF NOT EXISTS messages_insert_event
@@ -124,10 +129,13 @@ def create_app(test_config=None):
                 INSERT INTO message_events (message_id) VALUES (NEW.id);
             END;
 
-            CREATE TRIGGER IF NOT EXISTS messages_update_event
+            DROP TRIGGER IF EXISTS messages_update_event;
+            CREATE TRIGGER messages_update_event
             AFTER UPDATE OF author_id, body, is_deleted ON messages
             BEGIN
                 INSERT INTO message_events (message_id) VALUES (NEW.id);
+                INSERT INTO message_events (message_id)
+                    SELECT id FROM messages WHERE reply_to_id = NEW.id;
             END;
             """
         )
@@ -376,10 +384,17 @@ def create_app(test_config=None):
                        COALESCE(a.username, '[DELETED]') AS username,
                        a.id = ? AS is_own,
                        m.is_deleted,
+                       replied.id AS reply_id,
+                       CASE WHEN replied.is_deleted = 1 OR replied.author_id IS NULL
+                            THEN '[DELETED]' ELSE replied_author.username END AS reply_username,
+                       CASE WHEN replied.is_deleted = 1 OR replied.author_id IS NULL
+                            THEN '[DELETED]' ELSE replied.body END AS reply_body,
                        changed.change_id
                 FROM messages AS m
                 JOIN changed ON changed.message_id = m.id
                 LEFT JOIN accounts AS a ON a.id = m.author_id
+                LEFT JOIN messages AS replied ON replied.id = m.reply_to_id
+                LEFT JOIN accounts AS replied_author ON replied_author.id = replied.author_id
                 ORDER BY changed.change_id ASC
                 """,
                 (after_event, g.account["id"]),
@@ -395,9 +410,16 @@ def create_app(test_config=None):
                            m.created_at,
                            COALESCE(a.username, '[DELETED]') AS username,
                            a.id = ? AS is_own,
-                           m.is_deleted
+                           m.is_deleted,
+                           replied.id AS reply_id,
+                           CASE WHEN replied.is_deleted = 1 OR replied.author_id IS NULL
+                                THEN '[DELETED]' ELSE replied_author.username END AS reply_username,
+                           CASE WHEN replied.is_deleted = 1 OR replied.author_id IS NULL
+                                THEN '[DELETED]' ELSE replied.body END AS reply_body
                     FROM messages AS m
                     LEFT JOIN accounts AS a ON a.id = m.author_id
+                    LEFT JOIN messages AS replied ON replied.id = m.reply_to_id
+                    LEFT JOIN accounts AS replied_author ON replied_author.id = replied.author_id
                     ORDER BY m.id DESC LIMIT 100
                 ) ORDER BY id ASC
                 """,
@@ -412,6 +434,11 @@ def create_app(test_config=None):
                 "created_at": row["created_at"],
                 "is_own": bool(row["is_own"]),
                 "is_deleted": bool(row["is_deleted"]),
+                "reply_to": None if row["reply_id"] is None else {
+                    "id": row["reply_id"],
+                    "username": row["reply_username"],
+                    "text": row["reply_body"],
+                },
             }
             for row in rows
         ], warnings=pending_warning_count(database, g.account["id"]), cursor=cursor)
@@ -427,9 +454,22 @@ def create_app(test_config=None):
         if not text or len(text) > MAX_MESSAGE_LENGTH:
             return jsonify(error="Messages must be between 1 and 500 characters."), 400
         database = get_db()
+        reply_to_id = data.get("reply_to_id")
+        if reply_to_id is not None:
+            if type(reply_to_id) is not int or reply_to_id < 1:
+                return jsonify(error="Invalid reply target."), 400
+            reply_to = database.execute(
+                """
+                SELECT id FROM messages
+                WHERE id = ? AND is_deleted = 0 AND author_id IS NOT NULL
+                """,
+                (reply_to_id,),
+            ).fetchone()
+            if reply_to is None:
+                return jsonify(error="This message is no longer available to reply to."), 400
         cursor = database.execute(
-            "INSERT INTO messages (author_id, body) VALUES (?, ?)",
-            (g.account["id"], text),
+            "INSERT INTO messages (author_id, body, reply_to_id) VALUES (?, ?, ?)",
+            (g.account["id"], text, reply_to_id),
         )
         database.commit()
         return jsonify(id=cursor.lastrowid), 201

@@ -26,8 +26,9 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.1.1", page.data)
+        self.assertIn(b"v1.3.1", page.data)
         self.assertIn(b"/static/app.js", page.data)
+        self.assertIn(b"id=\"replyPreview\"", page.data)
         self.assertEqual(script.status_code, 200)
         script.close()
 
@@ -76,7 +77,94 @@ class ChatroomTests(unittest.TestCase):
         messages = second_client.get("/api/messages").json["messages"]
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["username"], first_user["username"])
+        self.assertIsNone(messages[0]["reply_to"])
         self.assertNotEqual(first_user["username"], second_user["username"])
+
+    def test_room_messages_can_quote_and_refresh_deleted_messages(self):
+        original_user, original_token = self.create_account()
+        original = self.client.post(
+            "/api/messages",
+            json={"text": "A message worth quoting"},
+            headers={"X-CSRF-Token": original_token},
+        )
+        self.assertEqual(original.status_code, 201, original.json)
+
+        reply_client = self.app.test_client()
+        _reply_user, reply_token = self.create_account(reply_client)
+        cursor = reply_client.get("/api/messages").json["cursor"]
+        invalid_reply = reply_client.post(
+            "/api/messages",
+            json={"text": "Invalid quote", "reply_to_id": 9999},
+            headers={"X-CSRF-Token": reply_token},
+        )
+        self.assertEqual(invalid_reply.status_code, 400)
+
+        sent = reply_client.post(
+            "/api/messages",
+            json={"text": "This is my reply", "reply_to_id": original.json["id"]},
+            headers={"X-CSRF-Token": reply_token},
+        )
+        self.assertEqual(sent.status_code, 201, sent.json)
+        reply = reply_client.get(f"/api/messages?after={cursor}").json["messages"][0]
+        self.assertEqual(reply["username"], reply_client.get("/api/session").json["user"]["username"])
+        self.assertEqual(reply["text"], "This is my reply")
+        self.assertEqual(reply["reply_to"], {
+            "id": original.json["id"],
+            "username": original_user["username"],
+            "text": "A message worth quoting",
+        })
+
+        admin_client, admin_token = self.create_admin()
+        cursor = reply_client.get("/api/messages").json["cursor"]
+        deleted = admin_client.delete(
+            f"/api/admin/messages/{original.json['id']}",
+            headers={"X-CSRF-Token": admin_token},
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.json)
+        updates = reply_client.get(f"/api/messages?after={cursor}").json["messages"]
+        updated_reply = next(message for message in updates if message["id"] == sent.json["id"])
+        self.assertEqual(updated_reply["reply_to"]["username"], "[DELETED]")
+        self.assertEqual(updated_reply["reply_to"]["text"], "[DELETED]")
+
+    def test_existing_database_migrates_reply_target_column(self):
+        legacy_database = Path(self.temp_dir.name) / "legacy.sqlite3"
+        with sqlite3.connect(legacy_database) as database:
+            database.executescript(
+                """
+                CREATE TABLE accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'member',
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    author_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+                    body TEXT NOT NULL,
+                    is_deleted INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+                INSERT INTO accounts (username, password_hash, created_at)
+                    VALUES ('Otter', 'hash', '2026-01-01T00:00:00Z');
+                INSERT INTO messages (author_id, body, created_at)
+                    VALUES (1, 'Existing message', '2026-01-01T00:00:00Z');
+                """
+            )
+
+        create_app({
+            "TESTING": True,
+            "SECRET_KEY": "test-secret-key",
+            "DATABASE": str(legacy_database),
+            "SESSION_COOKIE_SECURE": False,
+        })
+        with sqlite3.connect(legacy_database) as database:
+            columns = {row[1] for row in database.execute("PRAGMA table_info(messages)")}
+            existing_message = database.execute(
+                "SELECT body, reply_to_id FROM messages WHERE id = 1"
+            ).fetchone()
+        self.assertIn("reply_to_id", columns)
+        self.assertEqual(existing_message, ("Existing message", None))
 
     def test_direct_messages_are_private_and_list_contacts(self):
         first_user, first_token = self.create_account()
