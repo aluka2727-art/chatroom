@@ -1,4 +1,3 @@
-```javascript
 importScripts(
   "https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"
 );
@@ -123,4 +122,3 @@ onMessage(messaging, (payload) => {
     .getElementById("enable-notifications")
     .addEventListener("click", enableNotifications);
 </script>
-```
