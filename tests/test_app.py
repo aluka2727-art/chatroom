@@ -35,6 +35,8 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"id=\"replyPreview\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
         self.assertIn(b"/manifest.webmanifest", page.data)
+        self.assertIn(b"favicon.ico", page.data)
+        self.assertIn(b"apple-touch-icon.png", page.data)
         self.assertEqual(script.status_code, 200)
         self.assertIn(b"/api/push/subscriptions", script.data)
         self.assertIn(b"/sw.js", script.data)

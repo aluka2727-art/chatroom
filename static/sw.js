@@ -9,8 +9,8 @@ self.addEventListener("push", event => {
   const title = notification.title || "PIGIN";
   const options = {
     body: notification.body || "You have a new direct message.",
-    icon: "/static/icon-192.png",
-    badge: "/static/icon-192.png",
+    icon: "/static/icon-192.png?v=pigin-logo",
+    badge: "/static/icon-192.png?v=pigin-logo",
     data: { url: notification.url || "/?view=dms" },
     tag: notification.tag || "pigin-direct-message",
   };
