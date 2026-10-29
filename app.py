@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import secrets
@@ -9,17 +10,6 @@ import click
 from flask import Flask, abort, g, jsonify, render_template, request, send_from_directory, session
 from pywebpush import WebPushException, webpush
 from werkzeug.security import check_password_hash, generate_password_hash
-
-# 1. Initialize the Flask app first
-app = Flask(__name__)
-
-# 2. Import local modules / blueprints AFTER 'app' is created
-from notifications import notifications_bp, send_dm_push
-
-# Register your blueprint
-app.register_blueprint(notifications_bp)
-
-# Rest of your app configuration and routes follow...
 
 
 ANIMALS = (
@@ -41,6 +31,16 @@ ANIMALS = (
 RESERVED_USERNAMES = {"Cricket", "Viper"}
 MAX_ACCOUNTS = 100
 MAX_MESSAGE_LENGTH = 500
+
+
+def vapid_application_server_key(vapid):
+    from cryptography.hazmat.primitives import serialization
+
+    raw = vapid.public_key.public_bytes(
+        serialization.Encoding.X962,
+        serialization.PublicFormat.UncompressedPoint,
+    )
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
 def create_app(test_config=None):
@@ -217,13 +217,50 @@ def create_app(test_config=None):
             (account_id,),
         ).fetchone()[0]
 
-    def push_is_configured():
+    def vapid_is_ready():
         private_key_file = app.config["VAPID_PRIVATE_KEY_FILE"]
         return bool(
             app.config["VAPID_PUBLIC_KEY"]
             and private_key_file
             and Path(private_key_file).is_file()
         )
+
+    def ensure_vapid_keys():
+        if app.config.get("TESTING") or vapid_is_ready():
+            return
+        import fcntl
+
+        from py_vapid import Vapid
+
+        key_dir = Path(app.config["DATABASE"]).resolve().parent
+        key_dir.mkdir(parents=True, exist_ok=True)
+        private_path = key_dir / "vapid_private.pem"
+        public_path = key_dir / "vapid_public.txt"
+        lock_handle = (key_dir / ".vapid.lock").open("a")
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            if private_path.is_file() and public_path.is_file() and public_path.read_text().strip():
+                app.config["VAPID_PRIVATE_KEY_FILE"] = str(private_path)
+                app.config["VAPID_PUBLIC_KEY"] = public_path.read_text().strip()
+                return
+            vapid = Vapid()
+            vapid.generate_keys()
+            private_tmp = private_path.with_suffix(".pem.tmp")
+            public_tmp = public_path.with_suffix(".txt.tmp")
+            vapid.save_key(str(private_tmp))
+            private_tmp.chmod(0o600)
+            public_tmp.write_text(vapid_application_server_key(vapid) + "\n")
+            os.replace(private_tmp, private_path)
+            os.replace(public_tmp, public_path)
+            app.config["VAPID_PRIVATE_KEY_FILE"] = str(private_path)
+            app.config["VAPID_PUBLIC_KEY"] = public_path.read_text().strip()
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            lock_handle.close()
+
+    def push_is_configured():
+        ensure_vapid_keys()
+        return vapid_is_ready()
 
     def send_dm_push(database, recipient_id, sender_id, sender_username):
         if not push_is_configured():

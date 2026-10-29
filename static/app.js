@@ -30,6 +30,7 @@ const dmMessageInput = document.querySelector("#dmMessageInput");
 const dmSendButton = document.querySelector("#dmSendButton");
 const dmReplyPreview = document.querySelector("#dmReplyPreview");
 const dmReplyPreviewText = document.querySelector("#dmReplyPreviewText");
+const pushToggle = document.querySelector("#pushToggle");
 let currentUser = null;
 let csrfToken = "";
 let messageCursor = 0;
@@ -42,6 +43,7 @@ let activeView = "chat";
 let accountCreatedTimeout;
 let pollingTimer;
 let warningKind = null;
+let pendingDmPartnerId = null;
 
 async function api(path, options = {}, retryCsrf = true) {
   const method = (options.method || "GET").toUpperCase();
@@ -109,6 +111,8 @@ function showLogin() {
   dmMessageInput.style.height = "34px";
   dmMessageInput.placeholder = "Choose someone to message...";
   dmSendButton.disabled = true;
+  pendingDmPartnerId = null;
+  resetPushToggle();
   activeView = "chat";
   adminPanel.hidden = true;
   dmPanel.hidden = true;
@@ -180,6 +184,9 @@ function showRoom(user) {
     showWarning("message", `${user.warning_count === 1 ? "An admin deleted one of your messages" : `An admin deleted ${user.warning_count} of your messages`}. Deleted messages remain in the chat as [DELETED].`);
   }
   if (isAdmin) loadAdminData();
+  pendingDmPartnerId = readDmDeepLink();
+  refreshPushToggle();
+  if (pendingDmPartnerId) setRoomView("dms");
 }
 
 function showWarning(kind, message) {
@@ -395,8 +402,18 @@ async function loadDmContacts() {
     const data = await api("/api/dms");
     const contacts = data.contacts || [];
     const snapshot = JSON.stringify(contacts);
-    if (snapshot === dmContactsSnapshot) return;
+    const pendingId = pendingDmPartnerId;
+    if (snapshot === dmContactsSnapshot && !pendingId) return;
     dmContactsSnapshot = snapshot;
+    if (pendingId) {
+      pendingDmPartnerId = null;
+      clearDmDeepLink();
+      const contact = contacts.find(item => item.id === pendingId);
+      if (contact) {
+        selectDmContact(contact);
+        return;
+      }
+    }
     if (selectedDmUser) {
       selectedDmUser = contacts.find(contact => contact.id === selectedDmUser.id) || null;
       if (!selectedDmUser) {
@@ -620,6 +637,129 @@ async function loadAdminData() {
   }
 }
 
+function readDmDeepLink() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("view") !== "dms") return null;
+  const partnerId = Number(params.get("with"));
+  return Number.isInteger(partnerId) && partnerId > 0 ? partnerId : null;
+}
+
+function clearDmDeepLink() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("view") && !url.searchParams.has("with")) return;
+  url.searchParams.delete("view");
+  url.searchParams.delete("with");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function resetPushToggle() {
+  pushToggle.disabled = true;
+  pushToggle.setAttribute("aria-pressed", "false");
+  pushToggle.textContent = "Enable notifications";
+  delete pushToggle.dataset.publicKey;
+}
+
+function setPushToggle(state) {
+  const labels = {
+    unavailable: "Notifications unavailable",
+    blocked: "Notifications blocked",
+    off: "Enable notifications",
+    on: "Notifications on",
+  };
+  pushToggle.disabled = state !== "on" && state !== "off";
+  pushToggle.setAttribute("aria-pressed", String(state === "on"));
+  pushToggle.textContent = labels[state];
+}
+
+function urlBase64ToUint8Array(value) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const output = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index += 1) output[index] = raw.charCodeAt(index);
+  return output;
+}
+
+async function refreshPushToggle() {
+  if (!currentUser || !("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    setPushToggle("unavailable");
+    return;
+  }
+  if (Notification.permission === "denied") {
+    setPushToggle("blocked");
+    return;
+  }
+  try {
+    const config = await api("/api/push/config");
+    if (!config.enabled || !config.public_key) {
+      setPushToggle("unavailable");
+      return;
+    }
+    pushToggle.dataset.publicKey = config.public_key;
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    const subscription = await registration.pushManager.getSubscription();
+    setPushToggle(subscription ? "on" : "off");
+  } catch {
+    setPushToggle("unavailable");
+  }
+}
+
+async function disablePushSubscription() {
+  if (!("serviceWorker" in navigator)) return;
+  const registration = await navigator.serviceWorker.getRegistration();
+  const subscription = await registration?.pushManager.getSubscription();
+  if (!subscription) return;
+  const endpoint = subscription.endpoint;
+  try {
+    await api("/api/push/subscriptions", {
+      method: "DELETE",
+      body: JSON.stringify({ endpoint }),
+    });
+  } catch {
+    // Still remove the browser subscription so the next account on this device does not inherit it.
+  }
+  await subscription.unsubscribe();
+}
+
+async function togglePushNotifications() {
+  if (!currentUser || pushToggle.disabled) return;
+  pushToggle.disabled = true;
+  try {
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    const existing = await registration.pushManager.getSubscription();
+    if (existing) {
+      const endpoint = existing.endpoint;
+      await existing.unsubscribe();
+      await api("/api/push/subscriptions", {
+        method: "DELETE",
+        body: JSON.stringify({ endpoint }),
+      });
+      setPushToggle("off");
+      showDmError("");
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      setPushToggle(permission === "denied" ? "blocked" : "off");
+      if (permission === "denied") showDmError("Notification permission was denied.");
+      return;
+    }
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(pushToggle.dataset.publicKey),
+    });
+    await api("/api/push/subscriptions", {
+      method: "POST",
+      body: JSON.stringify(subscription.toJSON()),
+    });
+    setPushToggle("on");
+    showDmError("");
+  } catch (error) {
+    showDmError(error.message || "Could not update notifications.");
+    await refreshPushToggle();
+  }
+}
+
 function setRoomView(view) {
   if (view === "admin" && currentUser?.role !== "admin") return;
   activeView = view;
@@ -658,6 +798,7 @@ warningAction.addEventListener("click", async () => {
   const kind = warningKind;
   if (kind === "account") {
     try {
+      await disablePushSubscription();
       await api("/api/logout", { method: "POST", body: "{}" });
     } finally {
       showLogin();
@@ -706,6 +847,7 @@ accountForm.addEventListener("submit", async event => {
 
 document.querySelector("#switchAccount").addEventListener("click", async () => {
   try {
+    await disablePushSubscription();
     await api("/api/logout", { method: "POST", body: "{}" });
     showLogin();
     usernameInput.focus();
@@ -713,6 +855,17 @@ document.querySelector("#switchAccount").addEventListener("click", async () => {
     if (error.status === 401) showLogin();
   }
 });
+pushToggle.addEventListener("click", togglePushNotifications);
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", event => {
+    if (event.data?.type !== "open-dm" || !currentUser) return;
+    const target = new URL(event.data.url, window.location.origin);
+    const partnerId = Number(target.searchParams.get("with"));
+    if (target.searchParams.get("view") !== "dms" || !Number.isInteger(partnerId) || partnerId < 1) return;
+    pendingDmPartnerId = partnerId;
+    setRoomView("dms");
+  });
+}
 
 messageInput.addEventListener("input", () => {
   sendButton.disabled = !messageInput.value.trim();

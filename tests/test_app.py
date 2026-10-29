@@ -1,8 +1,10 @@
-import tempfile
 import sqlite3
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from pywebpush import WebPushException
 
 from app import create_app
 
@@ -15,6 +17,8 @@ class ChatroomTests(unittest.TestCase):
             "TESTING": True,
             "SECRET_KEY": "test-secret-key",
             "DATABASE": str(self.database_path),
+            "VAPID_PUBLIC_KEY": "",
+            "VAPID_PRIVATE_KEY_FILE": "",
             "SESSION_COOKIE_SECURE": False,
         })
         self.client = self.app.test_client()
@@ -29,7 +33,10 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"v1.3.1", page.data)
         self.assertIn(b"/static/app.js", page.data)
         self.assertIn(b"id=\"replyPreview\"", page.data)
+        self.assertIn(b"id=\"pushToggle\"", page.data)
         self.assertEqual(script.status_code, 200)
+        self.assertIn(b"/api/push/subscriptions", script.data)
+        self.assertIn(b"/sw.js", script.data)
         script.close()
 
     def create_account(self, client=None):
@@ -463,6 +470,145 @@ class ChatroomTests(unittest.TestCase):
         )
         self.assertEqual(stale_response.status_code, 400)
         self.assertEqual(fresh_response.status_code, 201)
+
+    def test_push_stays_off_until_the_server_has_keys(self):
+        _user, token = self.create_account()
+        config = self.client.get("/api/push/config")
+        self.assertEqual(config.status_code, 200)
+        self.assertFalse(config.json["enabled"])
+        self.assertIsNone(config.json["public_key"])
+        rejected = self.client.post(
+            "/api/push/subscriptions",
+            json={"endpoint": "https://push.example.test/device", "keys": {"p256dh": "key", "auth": "auth"}},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(rejected.status_code, 503)
+        self.assertEqual(self.client.post("/api/send-message", headers={"X-CSRF-Token": token}).status_code, 404)
+
+    def test_direct_message_push_uses_saved_subscription(self):
+        recipient, _recipient_token = self.create_account()
+        sender_client = self.app.test_client()
+        sender, sender_token = self.create_account(sender_client)
+        private_key = Path(self.temp_dir.name) / "vapid.pem"
+        private_key.write_text("test-private-key")
+        self.app.config["VAPID_PUBLIC_KEY"] = "B" * 87
+        self.app.config["VAPID_PRIVATE_KEY_FILE"] = str(private_key)
+        self.app.config["VAPID_SUBJECT"] = "mailto:pigin@example.com"
+
+        config = self.client.get("/api/push/config")
+        self.assertTrue(config.json["enabled"])
+        self.assertEqual(config.json["public_key"], "B" * 87)
+        invalid = self.client.post(
+            "/api/push/subscriptions",
+            json={"endpoint": "http://push.example.test/device", "keys": {"p256dh": "key", "auth": "auth"}},
+            headers={"X-CSRF-Token": self.client.get("/api/session").json["csrf_token"]},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        saved = self.client.post(
+            "/api/push/subscriptions",
+            json={
+                "endpoint": "https://push.example.test/device",
+                "keys": {"p256dh": "recipient-key", "auth": "recipient-auth"},
+            },
+            headers={"X-CSRF-Token": self.client.get("/api/session").json["csrf_token"]},
+        )
+        self.assertEqual(saved.status_code, 201, saved.json)
+
+        with patch("app.webpush") as webpush:
+            delivered = sender_client.post(
+                f"/api/dms/{recipient['id']}",
+                json={"text": "Ping"},
+                headers={"X-CSRF-Token": sender_token},
+            )
+            self.assertEqual(delivered.status_code, 201, delivered.json)
+            webpush.assert_called_once()
+            subscription = webpush.call_args.kwargs["subscription_info"]
+            self.assertEqual(subscription["endpoint"], "https://push.example.test/device")
+            self.assertEqual(subscription["keys"]["p256dh"], "recipient-key")
+            payload = webpush.call_args.kwargs["data"]
+            self.assertIn(sender["username"], payload)
+            self.assertIn(f"/?view=dms&with={sender['id']}", payload)
+            self.assertEqual(webpush.call_args.kwargs["vapid_claims"]["sub"], "mailto:pigin@example.com")
+
+        other_client = self.app.test_client()
+        _other_user, other_token = self.create_account(other_client)
+        untouched = other_client.delete(
+            "/api/push/subscriptions",
+            json={"endpoint": "https://push.example.test/device"},
+            headers={"X-CSRF-Token": other_token},
+        )
+        self.assertEqual(untouched.status_code, 200)
+        connection = sqlite3.connect(self.database_path)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM push_subscriptions").fetchone()[0], 1)
+
+        removed = self.client.delete(
+            "/api/push/subscriptions",
+            json={"endpoint": "https://push.example.test/device"},
+            headers={"X-CSRF-Token": self.client.get("/api/session").json["csrf_token"]},
+        )
+        self.assertEqual(removed.status_code, 200)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM push_subscriptions").fetchone()[0], 0)
+        connection.close()
+
+    def test_expired_push_subscription_is_removed(self):
+        recipient, _recipient_token = self.create_account()
+        sender_client = self.app.test_client()
+        _sender, sender_token = self.create_account(sender_client)
+        private_key = Path(self.temp_dir.name) / "vapid.pem"
+        private_key.write_text("test-private-key")
+        self.app.config["VAPID_PUBLIC_KEY"] = "B" * 87
+        self.app.config["VAPID_PRIVATE_KEY_FILE"] = str(private_key)
+        self.client.post(
+            "/api/push/subscriptions",
+            json={
+                "endpoint": "https://push.example.test/gone",
+                "keys": {"p256dh": "recipient-key", "auth": "recipient-auth"},
+            },
+            headers={"X-CSRF-Token": self.client.get("/api/session").json["csrf_token"]},
+        )
+
+        class Gone:
+            status_code = 410
+            text = "gone"
+
+        with patch("app.webpush", side_effect=WebPushException("expired", response=Gone())):
+            delivered = sender_client.post(
+                f"/api/dms/{recipient['id']}",
+                json={"text": "Still delivered in the app"},
+                headers={"X-CSRF-Token": sender_token},
+            )
+        self.assertEqual(delivered.status_code, 201, delivered.json)
+        connection = sqlite3.connect(self.database_path)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM push_subscriptions").fetchone()[0], 0)
+        connection.close()
+
+    def test_runtime_creates_vapid_keys_next_to_the_database(self):
+        database = Path(self.temp_dir.name) / "runtime" / "chat.sqlite3"
+        app = create_app({
+            "SECRET_KEY": "test-secret-key",
+            "DATABASE": str(database),
+            "TESTING": False,
+            "VAPID_PUBLIC_KEY": "",
+            "VAPID_PRIVATE_KEY_FILE": "",
+            "SESSION_COOKIE_SECURE": False,
+        })
+        client = app.test_client()
+        token = client.get("/api/session").json["csrf_token"]
+        created = client.post(
+            "/api/auth",
+            json={"mode": "create", "password": "correct-horse-battery", "confirm_password": "correct-horse-battery"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+        config = client.get("/api/push/config")
+        public_key = config.json["public_key"]
+        private_key = Path(app.config["VAPID_PRIVATE_KEY_FILE"])
+        self.assertTrue(config.json["enabled"])
+        self.assertTrue(public_key)
+        self.assertNotIn("=", public_key)
+        self.assertTrue(private_key.is_file())
+        self.assertEqual(private_key.parent, database.resolve().parent)
+        self.assertEqual((private_key.parent / "vapid_public.txt").read_text().strip(), public_key)
 
 
 if __name__ == "__main__":
