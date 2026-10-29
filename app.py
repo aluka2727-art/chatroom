@@ -2,6 +2,7 @@ import os
 import json
 import secrets
 import sqlite3
+from notifications import send_dm_push
 from functools import wraps
 from pathlib import Path
 
@@ -254,6 +255,8 @@ def create_app(test_config=None):
         if expired_ids:
             database.executemany("DELETE FROM push_subscriptions WHERE id = ?", ((sid,) for sid in expired_ids))
             database.commit()
+
+
 
     def login_required(view):
         @wraps(view)
