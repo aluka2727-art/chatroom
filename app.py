@@ -1,11 +1,13 @@
 import os
+import json
 import secrets
 import sqlite3
 from functools import wraps
 from pathlib import Path
 
 import click
-from flask import Flask, abort, g, jsonify, render_template, request, session
+from flask import Flask, abort, g, jsonify, render_template, request, send_from_directory, session
+from pywebpush import WebPushException, webpush
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
@@ -36,6 +38,9 @@ def create_app(test_config=None):
     app.config.from_mapping(
         SECRET_KEY=os.environ.get("CHATROOM_SECRET_KEY"),
         DATABASE=os.environ.get("CHATROOM_DATABASE", str(project_dir / "chatroom.sqlite3")),
+        VAPID_PUBLIC_KEY=os.environ.get("CHATROOM_VAPID_PUBLIC_KEY", ""),
+        VAPID_PRIVATE_KEY_FILE=os.environ.get("CHATROOM_VAPID_PRIVATE_KEY_FILE", ""),
+        VAPID_SUBJECT=os.environ.get("CHATROOM_VAPID_SUBJECT", "mailto:admin@example.com"),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.environ.get("CHATROOM_COOKIE_SECURE", "0") == "1",
@@ -95,6 +100,14 @@ def create_app(test_config=None):
                 ON direct_messages(sender_id, recipient_id, id);
             CREATE INDEX IF NOT EXISTS direct_messages_recipient_idx
                 ON direct_messages(recipient_id, sender_id, id);
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                endpoint TEXT NOT NULL UNIQUE,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            );
             CREATE TABLE IF NOT EXISTS message_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 message_id INTEGER NOT NULL
@@ -193,6 +206,55 @@ def create_app(test_config=None):
             (account_id,),
         ).fetchone()[0]
 
+    def push_is_configured():
+        private_key_file = app.config["VAPID_PRIVATE_KEY_FILE"]
+        return bool(
+            app.config["VAPID_PUBLIC_KEY"]
+            and private_key_file
+            and Path(private_key_file).is_file()
+        )
+
+    def send_dm_push(database, recipient_id, sender_id, sender_username):
+        if not push_is_configured():
+            return
+        subscriptions = database.execute(
+            "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE account_id = ?",
+            (recipient_id,),
+        ).fetchall()
+        payload = json.dumps({
+            "title": f"New direct message from {sender_username}",
+            "body": "Open PIGIN to read your message.",
+            "url": f"/?view=dms&with={sender_id}",
+            "tag": f"pigin-dm-{sender_id}",
+        })
+        expired_ids = []
+        for subscription in subscriptions:
+            try:
+                webpush(
+                    subscription_info={
+                        "endpoint": subscription["endpoint"],
+                        "keys": {
+                            "p256dh": subscription["p256dh"],
+                            "auth": subscription["auth"],
+                        },
+                    },
+                    data=payload,
+                    vapid_private_key=app.config["VAPID_PRIVATE_KEY_FILE"],
+                    vapid_claims={"sub": app.config["VAPID_SUBJECT"]},
+                    ttl=60,
+                )
+            except WebPushException as error:
+                status_code = getattr(getattr(error, "response", None), "status_code", None)
+                if status_code in {404, 410}:
+                    expired_ids.append(subscription["id"])
+                else:
+                    app.logger.warning("DM push delivery failed: %s", error)
+            except Exception:
+                app.logger.exception("Unexpected DM push delivery failure")
+        if expired_ids:
+            database.executemany("DELETE FROM push_subscriptions WHERE id = ?", ((sid,) for sid in expired_ids))
+            database.commit()
+
     def login_required(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
@@ -241,6 +303,13 @@ def create_app(test_config=None):
     def index():
         csrf_token()
         return render_template("index.html")
+
+    @app.get("/sw.js")
+    def service_worker():
+        response = send_from_directory(app.static_folder, "sw.js", mimetype="application/javascript")
+        response.headers["Service-Worker-Allowed"] = "/"
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.get("/api/session")
     def api_session():
@@ -613,7 +682,64 @@ def create_app(test_config=None):
             (g.account["id"], account_id, text, reply_to_id),
         )
         database.commit()
+        send_dm_push(database, account_id, g.account["id"], g.account["username"])
         return jsonify(id=cursor.lastrowid), 201
+
+    @app.get("/api/push/config")
+    @login_required
+    def api_push_config():
+        return jsonify(
+            enabled=push_is_configured(),
+            public_key=app.config["VAPID_PUBLIC_KEY"] if push_is_configured() else None,
+        )
+
+    @app.post("/api/push/subscriptions")
+    @login_required
+    def api_push_subscribe():
+        if not push_is_configured():
+            return jsonify(error="Push notifications are not configured on this server."), 503
+        data = request.get_json(silent=True) or {}
+        endpoint = data.get("endpoint")
+        keys = data.get("keys")
+        p256dh = keys.get("p256dh") if isinstance(keys, dict) else None
+        auth = keys.get("auth") if isinstance(keys, dict) else None
+        if (
+            not isinstance(endpoint, str)
+            or not endpoint.startswith("https://")
+            or len(endpoint) > 2048
+            or not isinstance(p256dh, str)
+            or not isinstance(auth, str)
+        ):
+            return jsonify(error="Invalid push subscription."), 400
+        database = get_db()
+        database.execute(
+            """
+            INSERT INTO push_subscriptions (account_id, endpoint, p256dh, auth)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(endpoint) DO UPDATE SET
+                account_id = excluded.account_id,
+                p256dh = excluded.p256dh,
+                auth = excluded.auth
+            """,
+            (g.account["id"], endpoint, p256dh, auth),
+        )
+        database.commit()
+        return jsonify(ok=True), 201
+
+    @app.delete("/api/push/subscriptions")
+    @login_required
+    def api_push_unsubscribe():
+        data = request.get_json(silent=True) or {}
+        endpoint = data.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint.startswith("https://"):
+            return jsonify(error="Invalid push subscription."), 400
+        database = get_db()
+        database.execute(
+            "DELETE FROM push_subscriptions WHERE account_id = ? AND endpoint = ?",
+            (g.account["id"], endpoint),
+        )
+        database.commit()
+        return jsonify(ok=True)
 
     @app.get("/api/admin/accounts")
     @login_required

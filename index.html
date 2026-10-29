@@ -87,7 +87,10 @@
           <section class="dm-panel" id="dmPanel" aria-label="Direct messages" hidden>
             <header class="admin-panel-heading">
               <div><h2>Direct messages</h2><p>Private conversations with room members</p></div>
-              <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
+              <div class="dm-panel-actions">
+                <button class="push-toggle" id="pushToggle" type="button" aria-pressed="false" disabled>Enable notifications</button>
+                <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
+              </div>
             </header>
             <p class="admin-error" id="dmError" role="alert" hidden></p>
             <div class="dm-layout">
