@@ -145,6 +145,13 @@ class ChatroomTests(unittest.TestCase):
                     is_deleted INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE direct_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                    recipient_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                    body TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 INSERT INTO accounts (username, password_hash, created_at)
                     VALUES ('Otter', 'hash', '2026-01-01T00:00:00Z');
                 INSERT INTO messages (author_id, body, created_at)
@@ -160,18 +167,26 @@ class ChatroomTests(unittest.TestCase):
         })
         with sqlite3.connect(legacy_database) as database:
             columns = {row[1] for row in database.execute("PRAGMA table_info(messages)")}
+            direct_message_columns = {
+                row[1] for row in database.execute("PRAGMA table_info(direct_messages)")
+            }
             existing_message = database.execute(
                 "SELECT body, reply_to_id FROM messages WHERE id = 1"
             ).fetchone()
+            direct_message_reply = database.execute(
+                "SELECT reply_to_id FROM direct_messages"
+            ).fetchone()
         self.assertIn("reply_to_id", columns)
+        self.assertIn("reply_to_id", direct_message_columns)
         self.assertEqual(existing_message, ("Existing message", None))
+        self.assertIsNone(direct_message_reply)
 
     def test_direct_messages_are_private_and_list_contacts(self):
         first_user, first_token = self.create_account()
         second_client = self.app.test_client()
         second_user, second_token = self.create_account(second_client)
         third_client = self.app.test_client()
-        third_user, _third_token = self.create_account(third_client)
+        third_user, third_token = self.create_account(third_client)
 
         sent = self.client.post(
             f"/api/dms/{second_user['id']}",
@@ -190,7 +205,7 @@ class ChatroomTests(unittest.TestCase):
 
         reply = second_client.post(
             f"/api/dms/{first_user['id']}",
-            json={"text": "Only for you"},
+            json={"text": "Only for you", "reply_to_id": sent.json["id"]},
             headers={"X-CSRF-Token": second_token},
         )
         self.assertEqual(reply.status_code, 201, reply.json)
@@ -198,10 +213,27 @@ class ChatroomTests(unittest.TestCase):
         self.assertEqual([message["text"] for message in conversation], ["A private hello", "Only for you"])
         self.assertEqual(conversation[0]["is_own"], True)
         self.assertEqual(conversation[1]["is_own"], False)
+        self.assertEqual(conversation[1]["reply_to"], {
+            "id": sent.json["id"],
+            "username": first_user["username"],
+            "text": "A private hello",
+        })
         incremental = second_client.get(
             f"/api/dms/{first_user['id']}?after={first_read['cursor']}"
         ).json["messages"]
         self.assertEqual([message["text"] for message in incremental], ["Only for you"])
+
+        third_message = third_client.post(
+            f"/api/dms/{first_user['id']}",
+            json={"text": "A different private conversation"},
+            headers={"X-CSRF-Token": third_token},
+        )
+        cross_conversation_reply = self.client.post(
+            f"/api/dms/{second_user['id']}",
+            json={"text": "This must not quote the other DM", "reply_to_id": third_message.json["id"]},
+            headers={"X-CSRF-Token": first_token},
+        )
+        self.assertEqual(cross_conversation_reply.status_code, 400)
         self.assertNotEqual(first_user["id"], third_user["id"])
 
     def test_direct_messages_validate_recipient_and_content(self):
@@ -220,6 +252,12 @@ class ChatroomTests(unittest.TestCase):
             f"/api/dms/{other['id']}", json={"text": " "}, headers=headers
         )
         self.assertEqual(invalid.status_code, 400)
+        invalid_reply_id = self.client.post(
+            f"/api/dms/{other['id']}",
+            json={"text": "Invalid quote", "reply_to_id": "not-an-id"},
+            headers=headers,
+        )
+        self.assertEqual(invalid_reply_id.status_code, 400)
         self.assertEqual(self.client.get("/api/dms/9999").status_code, 404)
 
     def test_deleting_account_removes_its_direct_messages(self):

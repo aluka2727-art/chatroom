@@ -88,6 +88,7 @@ def create_app(test_config=None):
                 sender_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
                 recipient_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
                 body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500),
+                reply_to_id INTEGER REFERENCES direct_messages(id) ON DELETE SET NULL,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
             CREATE INDEX IF NOT EXISTS direct_messages_sender_idx
@@ -120,6 +121,13 @@ def create_app(test_config=None):
         if "reply_to_id" not in message_columns:
             database.execute(
                 "ALTER TABLE messages ADD COLUMN reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL"
+            )
+        direct_message_columns = {
+            row["name"] for row in database.execute("PRAGMA table_info(direct_messages)")
+        }
+        if "reply_to_id" not in direct_message_columns:
+            database.execute(
+                "ALTER TABLE direct_messages ADD COLUMN reply_to_id INTEGER REFERENCES direct_messages(id) ON DELETE SET NULL"
             )
         database.executescript(
             """
@@ -515,9 +523,13 @@ def create_app(test_config=None):
         if after_id:
             rows = database.execute(
                 """
-                SELECT d.id, d.sender_id, d.body, d.created_at, a.username
+                SELECT d.id, d.sender_id, d.body, d.created_at, a.username,
+                       replied.id AS reply_id, replied.body AS reply_body,
+                       replied_author.username AS reply_username
                 FROM direct_messages AS d
                 JOIN accounts AS a ON a.id = d.sender_id
+                LEFT JOIN direct_messages AS replied ON replied.id = d.reply_to_id
+                LEFT JOIN accounts AS replied_author ON replied_author.id = replied.sender_id
                 WHERE ((d.sender_id = ? AND d.recipient_id = ?)
                     OR (d.sender_id = ? AND d.recipient_id = ?))
                   AND d.id > ?
@@ -530,9 +542,13 @@ def create_app(test_config=None):
             rows = database.execute(
                 """
                 SELECT * FROM (
-                    SELECT d.id, d.sender_id, d.body, d.created_at, a.username
+                    SELECT d.id, d.sender_id, d.body, d.created_at, a.username,
+                           replied.id AS reply_id, replied.body AS reply_body,
+                           replied_author.username AS reply_username
                     FROM direct_messages AS d
                     JOIN accounts AS a ON a.id = d.sender_id
+                    LEFT JOIN direct_messages AS replied ON replied.id = d.reply_to_id
+                    LEFT JOIN accounts AS replied_author ON replied_author.id = replied.sender_id
                     WHERE (d.sender_id = ? AND d.recipient_id = ?)
                        OR (d.sender_id = ? AND d.recipient_id = ?)
                     ORDER BY d.id DESC
@@ -550,6 +566,11 @@ def create_app(test_config=None):
                     "text": row["body"],
                     "created_at": row["created_at"],
                     "is_own": row["sender_id"] == g.account["id"],
+                    "reply_to": None if row["reply_id"] is None else {
+                        "id": row["reply_id"],
+                        "username": row["reply_username"],
+                        "text": row["reply_body"],
+                    },
                 }
                 for row in rows
             ],
@@ -572,9 +593,24 @@ def create_app(test_config=None):
         database = get_db()
         if database.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
             return jsonify(error="Account not found."), 404
+        reply_to_id = data.get("reply_to_id")
+        if reply_to_id is not None:
+            if type(reply_to_id) is not int or reply_to_id < 1:
+                return jsonify(error="Invalid reply target."), 400
+            reply_to = database.execute(
+                """
+                SELECT id FROM direct_messages
+                WHERE id = ?
+                  AND ((sender_id = ? AND recipient_id = ?)
+                    OR (sender_id = ? AND recipient_id = ?))
+                """,
+                (reply_to_id, g.account["id"], account_id, account_id, g.account["id"]),
+            ).fetchone()
+            if reply_to is None:
+                return jsonify(error="This message is not part of this conversation."), 400
         cursor = database.execute(
-            "INSERT INTO direct_messages (sender_id, recipient_id, body) VALUES (?, ?, ?)",
-            (g.account["id"], account_id, text),
+            "INSERT INTO direct_messages (sender_id, recipient_id, body, reply_to_id) VALUES (?, ?, ?, ?)",
+            (g.account["id"], account_id, text, reply_to_id),
         )
         database.commit()
         return jsonify(id=cursor.lastrowid), 201
@@ -761,626 +797,3 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(debug=os.environ.get("FLASK_DEBUG") == "1")
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#101116">
-<title>Chat</title>
-
-<style>
-:root {
-  color-scheme: dark;
-  --bg: #101116;
-  --panel: #191a22;
-  --message: #242630;
-  --border: #363844;
-  --accent: #647cff;
-  --text: #f5f5f7;
-  --muted: #a6a8b5;
-}
-
-* { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: system-ui, -apple-system, sans-serif;
-}
-
-button, input, textarea { font: inherit; }
-
-button {
-  border: 0;
-  border-radius: 8px;
-  background: var(--accent);
-  color: white;
-  padding: 10px 14px;
-  cursor: pointer;
-}
-
-button:disabled { opacity: .5; }
-
-input, textarea {
-  width: 100%;
-  padding: 12px;
-  background: #12131a;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: white;
-}
-
-.app {
-  max-width: 850px;
-  margin: auto;
-  padding: 16px;
-  min-height: 100dvh;
-}
-
-header, .chat-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-
-header {
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-h1 { font-size: 24px; }
-
-#status, .hint {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.panel {
-  max-width: 420px;
-  margin: 40px auto;
-  padding: 20px;
-  background: var(--panel);
-  border-radius: 12px;
-}
-
-#login-form { display: grid; gap: 12px; }
-
-.login-buttons { display: flex; gap: 10px; }
-.login-buttons button { flex: 1; }
-
-#error { color: #ff9696; }
-
-#chat-panel {
-  display: flex;
-  flex-direction: column;
-  height: calc(100dvh - 115px);
-  min-height: 400px;
-}
-
-#chat-panel[hidden], #login-panel[hidden] { display: none; }
-
-#messages {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 12px 0;
-}
-
-.message {
-  position: relative;
-  padding: 12px;
-  margin: 10px 0;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: var(--message);
-  overflow-wrap: anywhere;
-}
-
-.message:hover, .message:focus-within {
-  border-color: var(--border);
-}
-
-.message-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.username { font-weight: bold; }
-
-.timestamp {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.message-text {
-  margin: 0;
-  white-space: pre-wrap;
-}
-
-.reply-button {
-  display: none;
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: #393d50;
-  padding: 6px 10px;
-}
-
-.message:hover .reply-button,
-.message:focus-within .reply-button {
-  display: block;
-}
-
-.reply-quote {
-  display: block;
-  width: 100%;
-  text-align: left;
-  margin-bottom: 10px;
-  background: #171923;
-  border-left: 3px solid var(--accent);
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-
-#reply-preview {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-  margin-bottom: 10px;
-  background: var(--panel);
-  border-left: 4px solid var(--accent);
-}
-
-#reply-preview[hidden] { display: none; }
-
-#reply-preview-text {
-  overflow-wrap: anywhere;
-  color: var(--muted);
-}
-
-#chat-form {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-#message-input {
-  resize: vertical;
-  min-height: 44px;
-  max-height: 140px;
-}
-
-@media (hover: none) {
-  .reply-button {
-    display: inline-block;
-    position: static;
-    margin-top: 10px;
-  }
-}
-
-@media (max-width: 520px) {
-  .app { padding: 10px; }
-  header { align-items: flex-start; flex-direction: column; }
-  #notifications-button { width: 100%; }
-  #chat-panel { height: calc(100dvh - 160px); }
-  #chat-form { gap: 6px; }
-}
-</style>
-</head>
-
-<body>
-<div class="app">
-
-  <header>
-    <div>
-      <h1>Chat</h1>
-      <p id="status">Sign in to start chatting</p>
-    </div>
-    <button id="notifications-button">
-      🔔 Enable notifications
-    </button>
-  </header>
-
-  <section id="login-panel" class="panel">
-    <h2>Welcome to Chat</h2>
-
-    <form id="login-form">
-      <input id="email" type="email"
-        placeholder="Email address" autocomplete="email" required>
-
-      <input id="password" type="password"
-        placeholder="Password" minlength="6"
-        autocomplete="current-password" required>
-
-      <input id="display-name" type="text"
-        placeholder="Display name (for registration)"
-        maxlength="40">
-
-      <div class="login-buttons">
-        <button type="submit">Sign in</button>
-        <button type="button" id="register-button">
-          Create account
-        </button>
-      </div>
-    </form>
-
-    <p id="error" role="alert"></p>
-  </section>
-
-  <section id="chat-panel" hidden>
-    <div class="chat-heading">
-      <span id="current-user"></span>
-      <button id="logout-button">Sign out</button>
-    </div>
-
-    <main id="messages" aria-live="polite"></main>
-
-    <div id="reply-preview" hidden>
-      <div>
-        <strong>Replying to</strong>
-        <div id="reply-preview-text"></div>
-      </div>
-      <button type="button" id="cancel-reply">✕</button>
-    </div>
-
-    <form id="chat-form">
-      <textarea id="message-input" maxlength="4000"
-        placeholder="Write a message..." rows="2" required></textarea>
-      <button id="send-button" type="submit">Send</button>
-    </form>
-
-    <p class="hint">Hover over a message and click Reply.</p>
-  </section>
-</div>
-
-<script type="module">
-import { initializeApp } from
-  "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-
-import {
-  getAuth, createUserWithEmailAndPassword,
-  signInWithEmailAndPassword, onAuthStateChanged,
-  updateProfile, signOut
-} from
-  "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-
-import {
-  getFirestore, collection, addDoc, doc, setDoc,
-  query, orderBy, onSnapshot, serverTimestamp
-} from
-  "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-
-import {
-  getMessaging, getToken, onMessage, isSupported
-} from
-  "https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging.js";
-
-/*
-  FIREBASE SETUP REQUIRED:
-  Replace every placeholder with your Firebase web configuration.
-*/
-const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
-};
-
-const VAPID_PUBLIC_KEY = "YOUR_PUBLIC_VAPID_KEY";
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-
-let messaging = null;
-
-try {
-  if (await isSupported()) messaging = getMessaging(app);
-} catch (error) {
-  console.warn("Push messaging is unavailable", error);
-}
-
-const $ = id => document.getElementById(id);
-
-let currentUser = null;
-let replyingTo = null;
-let stopMessages = null;
-let sending = false;
-
-function setStatus(text) {
-  $("status").textContent = text;
-}
-
-function clearReply() {
-  replyingTo = null;
-  $("reply-preview").hidden = true;
-  $("reply-preview-text").textContent = "";
-}
-
-function selectReply(id, message) {
-  replyingTo = {
-    id,
-    username: message.username || "User",
-    text: message.text
-  };
-
-  $("reply-preview-text").textContent =
-    `${replyingTo.username}: ${replyingTo.text}`;
-
-  $("reply-preview").hidden = false;
-  $("message-input").focus();
-}
-
-function jumpToMessage(id) {
-  const target = [...$("messages").children]
-    .find(el => el.dataset.messageId === id);
-
-  if (!target) {
-    alert("Original message isn't currently loaded.");
-    return;
-  }
-
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
-}
-
-function renderMessage(id, message) {
-  const article = document.createElement("article");
-  article.className = "message";
-  article.dataset.messageId = id;
-
-  if (message.replyTo) {
-    const quote = document.createElement("button");
-    quote.type = "button";
-    quote.className = "reply-quote";
-    quote.textContent =
-      `↩ ${message.replyTo.username}: ${message.replyTo.text}`;
-
-    quote.addEventListener("click", () => {
-      jumpToMessage(message.replyTo.id);
-    });
-
-    article.appendChild(quote);
-  }
-
-  const header = document.createElement("div");
-  header.className = "message-header";
-
-  const name = document.createElement("span");
-  name.className = "username";
-  name.textContent = message.username || "User";
-
-  const time = document.createElement("span");
-  time.className = "timestamp";
-
-  if (message.createdAt?.toDate) {
-    time.textContent = message.createdAt.toDate().toLocaleTimeString(
-      [], { hour: "numeric", minute: "2-digit" }
-    );
-  }
-
-  header.append(name, time);
-
-  const body = document.createElement("p");
-  body.className = "message-text";
-  body.textContent = message.text || "";
-
-  const replyButton = document.createElement("button");
-  replyButton.type = "button";
-  replyButton.className = "reply-button";
-  replyButton.textContent = "↩ Reply";
-
-  replyButton.addEventListener("click", () => {
-    selectReply(id, message);
-  });
-
-  article.append(header, body, replyButton);
-  $("messages").appendChild(article);
-}
-
-function listenToMessages() {
-  if (stopMessages) stopMessages();
-
-  const messagesQuery = query(
-    collection(db, "messages"),
-    orderBy("createdAt", "asc")
-  );
-
-  stopMessages = onSnapshot(messagesQuery, snapshot => {
-    const nearBottom =
-      $("messages").scrollHeight -
-      $("messages").scrollTop -
-      $("messages").clientHeight < 100;
-
-    $("messages").replaceChildren();
-
-    snapshot.forEach(item => renderMessage(item.id, item.data()));
-
-    if (nearBottom) {
-      $("messages").scrollTop = $("messages").scrollHeight;
-    }
-
-    setStatus("Connected");
-  }, error => {
-    console.error(error);
-    setStatus("Couldn't load messages");
-  });
-}
-
-// Sign in.
-$("login-form").addEventListener("submit", async event => {
-  event.preventDefault();
-  $("error").textContent = "";
-
-  try {
-    await signInWithEmailAndPassword(
-      auth, $("email").value.trim(), $("password").value
-    );
-  } catch (error) {
-    $("error").textContent = error.message;
-  }
-});
-
-// Register.
-$("register-button").addEventListener("click", async () => {
-  const email = $("email").value.trim();
-  const password = $("password").value;
-  const name = $("display-name").value.trim();
-
-  if (!name) {
-    $("error").textContent = "Enter a display name first.";
-    return;
-  }
-
-  try {
-    const credential = await createUserWithEmailAndPassword(
-      auth, email, password
-    );
-
-    await updateProfile(credential.user, { displayName: name });
-
-    await setDoc(doc(db, "users", credential.user.uid), {
-      displayName: name,
-      createdAt: serverTimestamp()
-    });
-  } catch (error) {
-    $("error").textContent = error.message;
-  }
-});
-
-// Sign out.
-$("logout-button").addEventListener("click", async () => {
-  if (stopMessages) stopMessages();
-  stopMessages = null;
-  clearReply();
-  await signOut(auth);
-});
-
-// Cancel reply.
-$("cancel-reply").addEventListener("click", clearReply);
-
-// Send message or reply.
-$("chat-form").addEventListener("submit", async event => {
-  event.preventDefault();
-
-  if (!currentUser || sending) return;
-
-  const text = $("message-input").value.trim();
-  if (!text) return;
-
-  sending = true;
-  $("send-button").disabled = true;
-
-  try {
-    await addDoc(collection(db, "messages"), {
-      text,
-      uid: currentUser.uid,
-      username: currentUser.displayName || "User",
-      replyTo: replyingTo ? { ...replyingTo } : null,
-      createdAt: serverTimestamp()
-    });
-
-    $("message-input").value = "";
-    clearReply();
-  } catch (error) {
-    console.error(error);
-    alert("Couldn't send your message. Check your database setup.");
-  } finally {
-    sending = false;
-    $("send-button").disabled = false;
-  }
-});
-
-// Enable push notifications on this device.
-$("notifications-button").addEventListener("click", async () => {
-  try {
-    if (!currentUser) {
-      alert("Sign in first.");
-      return;
-    }
-
-    if (!messaging || !("Notification" in window) ||
-        !("serviceWorker" in navigator)) {
-      alert("Push notifications aren't supported in this browser.");
-      return;
-    }
-
-    const permission = await Notification.requestPermission();
-
-    if (permission !== "granted") {
-      alert("Please allow notifications in your browser settings.");
-      return;
-    }
-
-    const registration = await navigator.serviceWorker.register(
-      "./firebase-messaging-sw.js"
-    );
-
-    const token = await getToken(messaging, {
-      vapidKey: VAPID_PUBLIC_KEY,
-      serviceWorkerRegistration: registration
-    });
-
-    if (!token) throw new Error("No push token was returned.");
-
-    /*
-      For a GitHub Pages website, this only stores the device token.
-      It does NOT send push notifications by itself.
-
-      Deploy a secure backend/Cloud Function that sends messages
-      to registered tokens when other users send chat messages.
-    */
-    await setDoc(
-      doc(db, "users", currentUser.uid, "pushTokens", token),
-      { token, updatedAt: serverTimestamp() }
-    );
-
-    alert("This device is registered for notifications!");
-  } catch (error) {
-    console.error(error);
-    alert("Notification setup failed: " + error.message);
-  }
-});
-
-if (messaging) {
-  onMessage(messaging, payload => {
-    setStatus(payload.notification?.title || "New message received");
-  });
-}
-
-// Watch authentication.
-onAuthStateChanged(auth, user => {
-  currentUser = user;
-
-  $("login-panel").hidden = !!user;
-  $("chat-panel").hidden = !user;
-
-  if (!user) {
-    if (stopMessages) stopMessages();
-    stopMessages = null;
-    $("messages").replaceChildren();
-    clearReply();
-    setStatus("Sign in to start chatting");
-    return;
-  }
-
-  $("current-user").textContent =
-    `Signed in as ${user.displayName || user.email}`;
-
-  listenToMessages();
-});
-</script>
-</body>
-</html>
-```

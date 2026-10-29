@@ -28,10 +28,13 @@ const dmContacts = document.querySelector("#dmContacts");
 const dmFeed = document.querySelector("#dmFeed");
 const dmMessageInput = document.querySelector("#dmMessageInput");
 const dmSendButton = document.querySelector("#dmSendButton");
+const dmReplyPreview = document.querySelector("#dmReplyPreview");
+const dmReplyPreviewText = document.querySelector("#dmReplyPreviewText");
 let currentUser = null;
 let csrfToken = "";
 let messageCursor = 0;
 let replyingTo = null;
+let replyingToDm = null;
 let selectedDmUser = null;
 let dmMessageCursor = 0;
 let dmContactsSnapshot = "";
@@ -101,6 +104,7 @@ function showLogin() {
   dmMessageCursor = 0;
   dmContactsSnapshot = "";
   dmMessageInput.value = "";
+  clearDmReply();
   dmMessageInput.disabled = true;
   dmMessageInput.style.height = "34px";
   dmMessageInput.placeholder = "Choose someone to message...";
@@ -146,6 +150,7 @@ function showRoom(user) {
   dmMessageCursor = 0;
   dmContactsSnapshot = "";
   dmMessageInput.value = "";
+  clearDmReply();
   dmMessageInput.disabled = true;
   dmMessageInput.style.height = "34px";
   dmMessageInput.placeholder = "Choose someone to message...";
@@ -216,14 +221,7 @@ function addMessage(message) {
   text.textContent = message.text;
 
   if (message.reply_to) {
-    const quote = document.createElement("blockquote");
-    quote.className = "reply-quote";
-    const quoteAuthor = document.createElement("cite");
-    quoteAuthor.textContent = message.reply_to.username;
-    const quoteText = document.createElement("span");
-    quoteText.textContent = message.reply_to.text;
-    quote.append(quoteAuthor, quoteText);
-    content.append(quote);
+    content.append(createReplyQuote(message.reply_to));
   }
 
   meta.append(author, time);
@@ -243,6 +241,17 @@ function addMessage(message) {
   else feed.append(article);
 }
 
+function createReplyQuote(replyTo) {
+  const quote = document.createElement("blockquote");
+  quote.className = "reply-quote";
+  const quoteAuthor = document.createElement("cite");
+  quoteAuthor.textContent = replyTo.username;
+  const quoteText = document.createElement("span");
+  quoteText.textContent = replyTo.text;
+  quote.append(quoteAuthor, quoteText);
+  return quote;
+}
+
 function selectReply(message) {
   replyingTo = {
     id: message.id,
@@ -259,6 +268,23 @@ function clearReply() {
   replyingTo = null;
   replyPreview.hidden = true;
   replyPreviewText.textContent = "";
+}
+
+function selectDmReply(message) {
+  replyingToDm = {
+    id: message.id,
+    username: message.username,
+    text: message.text,
+  };
+  dmReplyPreviewText.textContent = `${replyingToDm.username}: ${replyingToDm.text}`;
+  dmReplyPreview.hidden = false;
+  dmMessageInput.focus();
+}
+
+function clearDmReply() {
+  replyingToDm = null;
+  dmReplyPreview.hidden = true;
+  dmReplyPreviewText.textContent = "";
 }
 
 function scrollToLatestMessage(behavior = "smooth", targetFeed = feed) {
@@ -404,6 +430,7 @@ async function loadDmContacts() {
 function selectDmContact(contact) {
   selectedDmUser = contact;
   dmMessageCursor = 0;
+  clearDmReply();
   dmFeed.replaceChildren();
   dmMessageInput.value = "";
   dmMessageInput.style.height = "34px";
@@ -441,7 +468,17 @@ function addDmMessage(message) {
   const text = document.createElement("p");
   text.className = "message-text";
   text.textContent = message.text;
+  if (message.reply_to) content.append(createReplyQuote(message.reply_to));
   meta.append(author, time);
+  if (message.reply_to !== undefined && message.username) {
+    const replyButton = document.createElement("button");
+    replyButton.className = "message-reply";
+    replyButton.type = "button";
+    replyButton.textContent = "Reply";
+    replyButton.setAttribute("aria-label", `Reply to ${message.username}'s message`);
+    replyButton.addEventListener("click", () => selectDmReply(message));
+    meta.append(replyButton);
+  }
   content.append(meta, text);
   article.append(avatar, content);
   const existing = dmFeed.querySelector(`[data-message-id="${message.id}"]`);
@@ -684,6 +721,7 @@ messageInput.addEventListener("input", () => {
   messageError.hidden = true;
 });
 document.querySelector("#cancelReply").addEventListener("click", clearReply);
+document.querySelector("#cancelDmReply").addEventListener("click", clearDmReply);
 document.querySelector("#messageForm").addEventListener("submit", async event => {
   event.preventDefault();
   const text = messageInput.value.trim();
@@ -723,12 +761,15 @@ document.querySelector("#dmMessageForm").addEventListener("submit", async event 
   if (!text || !selectedDmUser || dmSendButton.disabled) return;
   dmSendButton.disabled = true;
   try {
+    const payload = { text };
+    if (replyingToDm) payload.reply_to_id = replyingToDm.id;
     await api(`/api/dms/${selectedDmUser.id}`, {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(payload),
     });
     dmMessageInput.value = "";
     dmMessageInput.style.height = "34px";
+    clearDmReply();
     dmContactsSnapshot = "";
     await Promise.all([loadDmMessages(), loadDmContacts()]);
   } catch (error) {

@@ -8,8 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='room-replies-20261029') }}">
-  <script src="{{ url_for('static', filename='app.js', v='room-replies-20261029') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='dm-replies-20261029') }}">
+  <script src="{{ url_for('static', filename='app.js', v='dm-replies-20261029') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -102,6 +102,13 @@
                 </section>
                 <div class="composer-wrap">
                   <form class="composer" id="dmMessageForm">
+                    <div class="reply-preview" id="dmReplyPreview" hidden>
+                      <div class="reply-preview-copy">
+                        <strong>Replying to</strong>
+                        <span id="dmReplyPreviewText"></span>
+                      </div>
+                      <button class="reply-cancel" id="cancelDmReply" type="button">Cancel</button>
+                    </div>
                     <textarea id="dmMessageInput" maxlength="500" rows="1" placeholder="Choose someone to message..." aria-label="Write a direct message" disabled></textarea>
                     <div class="composer-bottom">
                       <span></span>
