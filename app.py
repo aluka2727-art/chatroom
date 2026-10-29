@@ -1,8 +1,7 @@
-import os
 import json
+import os
 import secrets
 import sqlite3
-from notifications import send_dm_push
 from functools import wraps
 from pathlib import Path
 
@@ -10,6 +9,17 @@ import click
 from flask import Flask, abort, g, jsonify, render_template, request, send_from_directory, session
 from pywebpush import WebPushException, webpush
 from werkzeug.security import check_password_hash, generate_password_hash
+
+# 1. Initialize the Flask app first
+app = Flask(__name__)
+
+# 2. Import local modules / blueprints AFTER 'app' is created
+from notifications import notifications_bp, send_dm_push
+
+# Register your blueprint
+app.register_blueprint(notifications_bp)
+
+# Rest of your app configuration and routes follow...
 
 
 ANIMALS = (
