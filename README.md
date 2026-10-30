@@ -1,6 +1,6 @@
 # PIGIN Chat Room
 
-This is a Flask chat app backed by SQLite. Accounts and messages are stored on the server and shared between visitors/devices. Passwords are hashed by Werkzeug; sessions use signed, HTTP-only cookies; mutating API calls require a CSRF token. Message authors are stored by account ID, so deleting an account leaves its messages visible as `[DELETED]`, and the username can be reused safely.
+This is a Flask chat app backed by Supabase Postgres. Accounts and messages are stored in that database and shared between visitors and devices. Without `SUPABASE_DB_URL`, the app falls back to a local SQLite file. Passwords are hashed by Werkzeug; sessions use signed, HTTP-only cookies; mutating API calls require a CSRF token. Message authors are stored by account ID, so deleting an account leaves its messages visible as `[DELETED]`, and the username can be reused safely.
 
 Browser-local profiles from the earlier static demo are not imported. Create the server-backed Cricket account with the CLI command below, then create/sign in to any other accounts on the deployed site. Any account with the `admin` role can use the admin panel and API.
 
@@ -28,7 +28,7 @@ Open `http://127.0.0.1:5000`. To create the protected Cricket account, run this 
 flask --app app create-admin
 ```
 
-The command prompts for Cricket's password without echoing it. Use at least 8 characters. Local SQLite data is stored in `chatroom.sqlite3` unless `CHATROOM_DATABASE` is set.
+The command prompts for Cricket's password without echoing it. Use at least 8 characters. Put the Supabase connection string in a `.env` file in this folder as `SUPABASE_DB_URL=...` and leave that file out of git. If that variable is missing, local data is stored in `chatroom.sqlite3` unless `CHATROOM_DATABASE` is set.
 
 Direct-message alerts use browser push. The first time a signed-in member opens the DMS tab, the app writes `vapid_private.pem` and `vapid_public.txt` next to the database. Leave those files on the server and out of git. Members turn alerts on with **Enable notifications** in the DMS tab. On an iPhone, add the site to the Home Screen from Safari and open PIGIN from that icon before enabling alerts. To supply keys yourself, set `CHATROOM_VAPID_PUBLIC_KEY` to the URL-safe base64 application server key, `CHATROOM_VAPID_PRIVATE_KEY_FILE` to the private PEM path, and `CHATROOM_VAPID_SUBJECT` to a `mailto:` address for this site.
 
@@ -78,6 +78,7 @@ python -m unittest discover -s tests -v
 
 	os.environ["CHATROOM_SECRET_KEY"] = "PASTE_YOUR_PRIVATE_RANDOM_SECRET_HERE"
 	os.environ["CHATROOM_DATABASE"] = "/home/YOURUSERNAME/chatroom/data/chatroom.sqlite3"
+	os.environ["SUPABASE_DB_URL"] = "PASTE_YOUR_SUPABASE_POSTGRES_URI_HERE"
 	os.environ["CHATROOM_COOKIE_SECURE"] = "1"
 
 	from app import app as application

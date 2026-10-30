@@ -5,6 +5,7 @@ __pycache__/
 *.sqlite3-wal
 .venv/
 venv/
+.env
 vapid_private.pem
 vapid_public.txt
 .vapid.lock

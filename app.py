@@ -11,6 +11,15 @@ from flask import Flask, abort, g, jsonify, render_template, request, send_from_
 from pywebpush import WebPushException, webpush
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from db import (
+    PostgresConnection,
+    copy_sqlite_to_postgres,
+    init_postgres,
+    load_env_file,
+)
+
+load_env_file()
+
 
 ANIMALS = (
     "Alpaca", "Armadillo", "Badger", "Beaver", "Bison", "Bobcat", "Capybara",
@@ -49,6 +58,8 @@ def create_app(test_config=None):
     app.config.from_mapping(
         SECRET_KEY=os.environ.get("CHATROOM_SECRET_KEY"),
         DATABASE=os.environ.get("CHATROOM_DATABASE", str(project_dir / "chatroom.sqlite3")),
+        SUPABASE_DB_URL=os.environ.get("SUPABASE_DB_URL", ""),
+        USE_SUPABASE=False,
         VAPID_PUBLIC_KEY=os.environ.get("CHATROOM_VAPID_PUBLIC_KEY", ""),
         VAPID_PRIVATE_KEY_FILE=os.environ.get("CHATROOM_VAPID_PRIVATE_KEY_FILE", ""),
         VAPID_SUBJECT=os.environ.get("CHATROOM_VAPID_SUBJECT", "mailto:admin@example.com"),
@@ -60,16 +71,28 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
+    database_setting = str((test_config or {}).get("DATABASE") or "")
+    supabase_url = str(app.config.get("SUPABASE_DB_URL") or "")
+    if database_setting.startswith("postgres"):
+        app.config["USE_SUPABASE"] = True
+        app.config["SUPABASE_DB_URL"] = database_setting
+    elif database_setting:
+        app.config["USE_SUPABASE"] = False
+    else:
+        app.config["USE_SUPABASE"] = supabase_url.startswith("postgres")
 
     def get_db():
         if "db" not in g:
-            database_path = Path(app.config["DATABASE"])
-            database_path.parent.mkdir(parents=True, exist_ok=True)
-            connection = sqlite3.connect(database_path, timeout=10)
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA journal_mode = WAL")
-            g.db = connection
+            if app.config["USE_SUPABASE"]:
+                g.db = PostgresConnection(app.config["SUPABASE_DB_URL"])
+            else:
+                database_path = Path(app.config["DATABASE"])
+                database_path.parent.mkdir(parents=True, exist_ok=True)
+                connection = sqlite3.connect(database_path, timeout=10)
+                connection.row_factory = sqlite3.Row
+                connection.execute("PRAGMA foreign_keys = ON")
+                connection.execute("PRAGMA journal_mode = WAL")
+                g.db = connection
         return g.db
 
     @app.teardown_appcontext
@@ -80,6 +103,9 @@ def create_app(test_config=None):
 
     def init_db():
         database = get_db()
+        if app.config["USE_SUPABASE"]:
+            init_postgres(database)
+            return
         database.executescript(
             """
             CREATE TABLE IF NOT EXISTS accounts (
@@ -340,7 +366,12 @@ def create_app(test_config=None):
 
     def tombstone_account(database, account):
         database.execute(
-            "INSERT OR REPLACE INTO deleted_accounts (account_id, username) VALUES (?, ?)",
+            """
+            INSERT INTO deleted_accounts (account_id, username) VALUES (?, ?)
+            ON CONFLICT(account_id) DO UPDATE SET
+                username = excluded.username,
+                deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            """,
             (account["id"], account["username"]),
         )
         database.execute(
@@ -429,12 +460,14 @@ def create_app(test_config=None):
                 username = secrets.choice(available)
                 password_hash = generate_password_hash(password)
                 cursor = database.execute(
-                    "INSERT INTO accounts (username, password_hash) VALUES (?, ?)",
+                    "INSERT INTO accounts (username, password_hash) VALUES (?, ?) RETURNING id",
                     (username, password_hash),
                 )
-                account_id = cursor.lastrowid
+                account_id = inserted_id(cursor)
                 database.commit()
-            except sqlite3.Error:
+            except Exception as error:
+                if not _is_database_error(error):
+                    raise
                 database.rollback()
                 app.logger.exception("Account creation failed")
                 return jsonify(error="Could not create the account. Please try again."), 500
@@ -603,11 +636,12 @@ def create_app(test_config=None):
             if reply_to is None:
                 return jsonify(error="This message is no longer available to reply to."), 400
         cursor = database.execute(
-            "INSERT INTO messages (author_id, body, reply_to_id) VALUES (?, ?, ?)",
+            "INSERT INTO messages (author_id, body, reply_to_id) VALUES (?, ?, ?) RETURNING id",
             (g.account["id"], text, reply_to_id),
         )
+        message_id = inserted_id(cursor)
         database.commit()
-        return jsonify(id=cursor.lastrowid), 201
+        return jsonify(id=message_id), 201
 
     @app.get("/api/dms")
     @login_required
@@ -736,12 +770,13 @@ def create_app(test_config=None):
             if reply_to is None:
                 return jsonify(error="This message is not part of this conversation."), 400
         cursor = database.execute(
-            "INSERT INTO direct_messages (sender_id, recipient_id, body, reply_to_id) VALUES (?, ?, ?, ?)",
+            "INSERT INTO direct_messages (sender_id, recipient_id, body, reply_to_id) VALUES (?, ?, ?, ?) RETURNING id",
             (g.account["id"], account_id, text, reply_to_id),
         )
+        message_id = inserted_id(cursor)
         database.commit()
         send_dm_push(database, account_id, g.account["id"], g.account["username"])
-        return jsonify(id=cursor.lastrowid), 201
+        return jsonify(id=message_id), 201
 
     @app.get("/api/push/config")
     @login_required
@@ -973,7 +1008,33 @@ def create_app(test_config=None):
         database.commit()
         click.echo(f"Deleted {len(members)} member accounts; chat history was preserved.")
 
+    @app.cli.command("import-sqlite")
+    @click.option("--sqlite", "sqlite_path", default=None, help="SQLite file to copy into Supabase.")
+    def import_sqlite_command(sqlite_path):
+        """Copy accounts and messages from a SQLite file into Supabase."""
+        if not app.config["USE_SUPABASE"]:
+            raise click.ClickException("Set SUPABASE_DB_URL before importing.")
+        path = sqlite_path or app.config["DATABASE"]
+        counts = copy_sqlite_to_postgres(get_db(), path)
+        click.echo(
+            "Copied {accounts} accounts, {messages} room messages, and {direct_messages} direct messages.".format(
+                **counts
+            )
+        )
+
     return app
+
+
+def inserted_id(cursor):
+    row_id = cursor.fetchone()[0]
+    cursor.close()
+    return row_id
+
+
+def _is_database_error(error):
+    if isinstance(error, sqlite3.Error):
+        return True
+    return type(error).__module__.startswith("psycopg")
 
 
 app = create_app()
