@@ -1,5 +1,7 @@
+import json
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -30,7 +32,9 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.4.1", page.data)
+        self.assertIn(b"v1.7.0", page.data)
+        self.assertIn(b"unread-dot", page.data)
+        self.assertIn(b"id=\"menuButton\"", page.data)
         self.assertIn(b"/static/app.js", page.data)
         self.assertIn(b"id=\"replyPreview\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
@@ -39,6 +43,9 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"apple-touch-icon.png", page.data)
         self.assertEqual(script.status_code, 200)
         self.assertIn(b"/api/push/subscriptions", script.data)
+        self.assertIn(b"/api/reads", script.data)
+        self.assertIn(b"/api/push/presence", script.data)
+        self.assertIn(b"setAppBadge", script.data)
         self.assertIn(b"/sw.js", script.data)
         self.assertIn(b"Add to Home Screen", script.data)
         script.close()
@@ -617,6 +624,170 @@ class ChatroomTests(unittest.TestCase):
         self.assertTrue(private_key.is_file())
         self.assertEqual(private_key.parent, database.resolve().parent)
         self.assertEqual((private_key.parent / "vapid_public.txt").read_text().strip(), public_key)
+        worker = client.get("/sw.js")
+        self.assertIn(b"badgeCount", worker.data)
+        self.assertIn(b"setAppBadge", worker.data)
+        worker.close()
+
+    def enable_push(self, client, endpoint):
+        private_key = Path(self.temp_dir.name) / "vapid.pem"
+        private_key.write_text("test-private-key")
+        self.app.config["VAPID_PUBLIC_KEY"] = "B" * 87
+        self.app.config["VAPID_PRIVATE_KEY_FILE"] = str(private_key)
+        self.app.config["VAPID_SUBJECT"] = "mailto:pigin@example.com"
+        token = client.get("/api/session").json["csrf_token"]
+        saved = client.post(
+            "/api/push/subscriptions",
+            json={"endpoint": endpoint, "keys": {"p256dh": "key", "auth": "auth"}},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(saved.status_code, 201, saved.json)
+        return token
+
+    def test_unread_counts_follow_the_open_chat(self):
+        first_user, first_token = self.create_account()
+        self.client.post(
+            "/api/messages",
+            json={"text": "Already in the room"},
+            headers={"X-CSRF-Token": first_token},
+        )
+        second_client = self.app.test_client()
+        second_user, second_token = self.create_account(second_client)
+        self.assertEqual(second_client.get("/api/messages").json["unread"]["group"], 0)
+        third_client = self.app.test_client()
+        _third_user, _third_token = self.create_account(third_client)
+        self.assertEqual(third_client.get("/api/messages").json["unread"]["group"], 0)
+
+        sent = self.client.post(
+            "/api/messages",
+            json={"text": "Hello room"},
+            headers={"X-CSRF-Token": first_token},
+        )
+        self.assertEqual(sent.status_code, 201, sent.json)
+        unread = second_client.get("/api/messages").json["unread"]
+        self.assertEqual(unread["group"], 1)
+        self.assertEqual(unread["total"], 1)
+        self.assertEqual(self.client.get("/api/messages").json["unread"]["group"], 0)
+
+        marked = second_client.post(
+            "/api/reads",
+            json={"kind": "chat"},
+            headers={"X-CSRF-Token": second_token},
+        )
+        self.assertEqual(marked.status_code, 200, marked.json)
+        self.assertEqual(marked.json["group"], 0)
+        self.assertEqual(marked.json["total"], 0)
+
+        self.client.post(
+            f"/api/dms/{second_user['id']}",
+            json={"text": "psst"},
+            headers={"X-CSRF-Token": first_token},
+        )
+        dm_unread = second_client.get("/api/messages").json["unread"]
+        self.assertEqual(dm_unread["dms"], 1)
+        self.assertEqual(dm_unread["conversations"][str(first_user["id"])], 1)
+        self.assertEqual(dm_unread["group"], 0)
+        self.assertEqual(self.client.get("/api/messages").json["unread"]["dms"], 0)
+
+        cleared = second_client.post(
+            "/api/reads",
+            json={"kind": "dm", "partner_id": first_user["id"]},
+            headers={"X-CSRF-Token": second_token},
+        )
+        self.assertEqual(cleared.status_code, 200, cleared.json)
+        self.assertEqual(cleared.json["total"], 0)
+        rejected = second_client.post(
+            "/api/reads",
+            json={"kind": "nope"},
+            headers={"X-CSRF-Token": second_token},
+        )
+        self.assertEqual(rejected.status_code, 400)
+
+    def test_room_push_skips_the_open_tab_and_counts_the_badge(self):
+        recipient, recipient_token = self.create_account()
+        sender_client = self.app.test_client()
+        sender, sender_token = self.create_account(sender_client)
+        self.enable_push(self.client, "https://push.example.test/phone")
+        self.enable_push(self.client, "https://push.example.test/desktop")
+        self.enable_push(sender_client, "https://push.example.test/sender")
+
+        with patch("app.webpush") as webpush:
+            delivered = sender_client.post(
+                "/api/messages",
+                json={"text": "Hello room"},
+                headers={"X-CSRF-Token": sender_token},
+            )
+            self.assertEqual(delivered.status_code, 201, delivered.json)
+            self.assertEqual(webpush.call_count, 2)
+            endpoints = {
+                call.kwargs["subscription_info"]["endpoint"] for call in webpush.call_args_list
+            }
+            self.assertEqual(
+                endpoints,
+                {"https://push.example.test/phone", "https://push.example.test/desktop"},
+            )
+            payload = json.loads(webpush.call_args.kwargs["data"])
+            self.assertEqual(payload["url"], "/?view=chat")
+            self.assertIn(sender["username"], payload["title"])
+            self.assertEqual(payload["badgeCount"], 1)
+            self.assertEqual(payload["tag"], "pigin-chat")
+
+        now_ms = int(time.time() * 1000)
+        visible = self.client.post(
+            "/api/push/presence",
+            json={
+                "endpoint": "https://push.example.test/desktop",
+                "client_id": "desktop-tab-1",
+                "visible": True,
+                "reported_at": now_ms,
+            },
+            headers={"X-CSRF-Token": recipient_token},
+        )
+        self.assertEqual(visible.status_code, 200, visible.json)
+        stale = self.client.post(
+            "/api/push/presence",
+            json={
+                "endpoint": "https://push.example.test/desktop",
+                "client_id": "desktop-tab-1",
+                "visible": False,
+                "reported_at": now_ms - 1_000,
+            },
+            headers={"X-CSRF-Token": recipient_token},
+        )
+        self.assertEqual(stale.status_code, 200, stale.json)
+
+        with patch("app.webpush") as webpush:
+            sender_client.post(
+                "/api/messages",
+                json={"text": "Still in the other tab"},
+                headers={"X-CSRF-Token": sender_token},
+            )
+            self.assertEqual(webpush.call_count, 1)
+            endpoint = webpush.call_args.kwargs["subscription_info"]["endpoint"]
+            self.assertEqual(endpoint, "https://push.example.test/phone")
+            self.assertEqual(json.loads(webpush.call_args.kwargs["data"])["badgeCount"], 2)
+
+        hidden = self.client.post(
+            "/api/push/presence",
+            json={
+                "endpoint": "https://push.example.test/desktop",
+                "client_id": "desktop-tab-1",
+                "visible": False,
+                "reported_at": now_ms + 1_000,
+            },
+            headers={"X-CSRF-Token": recipient_token},
+        )
+        self.assertEqual(hidden.status_code, 200, hidden.json)
+        with patch("app.webpush") as webpush:
+            sender_client.post(
+                f"/api/dms/{recipient['id']}",
+                json={"text": "A direct one"},
+                headers={"X-CSRF-Token": sender_token},
+            )
+            self.assertEqual(webpush.call_count, 2)
+            payload = json.loads(webpush.call_args.kwargs["data"])
+            self.assertIn(f"/?view=dms&with={sender['id']}", payload["url"])
+            self.assertEqual(payload["badgeCount"], 3)
 
 
 if __name__ == "__main__":

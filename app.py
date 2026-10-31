@@ -3,6 +3,7 @@ import json
 import os
 import secrets
 import sqlite3
+import time
 from functools import wraps
 from pathlib import Path
 
@@ -40,6 +41,7 @@ ANIMALS = (
 RESERVED_USERNAMES = {"Cricket", "Viper"}
 MAX_ACCOUNTS = 100
 MAX_MESSAGE_LENGTH = 500
+PRESENCE_LEASE_SECONDS = 12
 
 
 def vapid_application_server_key(vapid):
@@ -101,10 +103,54 @@ def create_app(test_config=None):
         if connection is not None:
             connection.close()
 
+    def seed_reads_for_account(database, account_id):
+        if database.execute(
+            "SELECT 1 FROM chat_reads WHERE account_id = ?",
+            (account_id,),
+        ).fetchone():
+            return
+        latest_message = database.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM messages"
+        ).fetchone()[0]
+        database.execute(
+            "INSERT INTO chat_reads (account_id, last_read_message_id) VALUES (?, ?)",
+            (account_id, latest_message),
+        )
+        database.execute(
+            """
+            INSERT INTO dm_reads (account_id, partner_id, last_read_message_id)
+            SELECT ?, partner_id, MAX(message_id)
+            FROM (
+                SELECT recipient_id AS partner_id, id AS message_id
+                FROM direct_messages WHERE sender_id = ?
+                UNION ALL
+                SELECT sender_id AS partner_id, id AS message_id
+                FROM direct_messages WHERE recipient_id = ?
+            ) AS conversations
+            GROUP BY partner_id
+            """,
+            (account_id, account_id, account_id),
+        )
+
+    def seed_missing_read_cursors(database):
+        missing = database.execute(
+            """
+            SELECT id FROM accounts
+            WHERE NOT EXISTS (
+                SELECT 1 FROM chat_reads WHERE chat_reads.account_id = accounts.id
+            )
+            """
+        ).fetchall()
+        for account in missing:
+            seed_reads_for_account(database, account["id"])
+        if missing:
+            database.commit()
+
     def init_db():
         database = get_db()
         if app.config["USE_SUPABASE"]:
             init_postgres(database)
+            seed_missing_read_cursors(database)
             return
         database.executescript(
             """
@@ -144,6 +190,24 @@ def create_app(test_config=None):
                 p256dh TEXT NOT NULL,
                 auth TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            );
+            CREATE TABLE IF NOT EXISTS chat_reads (
+                account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+                last_read_message_id INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS dm_reads (
+                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                partner_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                last_read_message_id INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (account_id, partner_id)
+            );
+            CREATE TABLE IF NOT EXISTS push_presence (
+                endpoint TEXT NOT NULL,
+                client_id TEXT NOT NULL,
+                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                visible_until INTEGER NOT NULL,
+                reported_at INTEGER NOT NULL,
+                PRIMARY KEY (endpoint, client_id)
             );
             CREATE TABLE IF NOT EXISTS message_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,6 +264,7 @@ def create_app(test_config=None):
         if database.execute("SELECT COUNT(*) FROM message_events").fetchone()[0] == 0:
             database.execute("INSERT INTO message_events (message_id) SELECT id FROM messages")
             database.commit()
+        seed_missing_read_cursors(database)
 
     with app.app_context():
         init_db()
@@ -288,21 +353,68 @@ def create_app(test_config=None):
         ensure_vapid_keys()
         return vapid_is_ready()
 
-    def send_dm_push(database, recipient_id, sender_id, sender_username):
+    def unread_payload(database, account_id):
+        group = database.execute(
+            """
+            SELECT COUNT(*)
+            FROM messages AS m
+            WHERE m.id > COALESCE(
+                    (SELECT last_read_message_id FROM chat_reads WHERE account_id = ?),
+                    0
+                )
+              AND m.is_deleted = 0
+              AND m.author_id IS NOT NULL
+              AND m.author_id != ?
+            """,
+            (account_id, account_id),
+        ).fetchone()[0]
+        rows = database.execute(
+            """
+            SELECT d.sender_id AS partner_id, COUNT(*) AS unread
+            FROM direct_messages AS d
+            LEFT JOIN dm_reads AS r
+              ON r.account_id = ? AND r.partner_id = d.sender_id
+            WHERE d.recipient_id = ?
+              AND d.id > COALESCE(r.last_read_message_id, 0)
+            GROUP BY d.sender_id
+            """,
+            (account_id, account_id),
+        ).fetchall()
+        conversations = {str(row["partner_id"]): row["unread"] for row in rows}
+        direct_total = sum(conversations.values())
+        return {
+            "group": group,
+            "dms": direct_total,
+            "total": group + direct_total,
+            "conversations": conversations,
+        }
+
+    def foreground_endpoints(database, account_id):
+        now = int(time.time())
+        return {
+            row["endpoint"]
+            for row in database.execute(
+                """
+                SELECT endpoint FROM push_presence
+                WHERE account_id = ? AND visible_until > ?
+                """,
+                (account_id, now),
+            ).fetchall()
+        }
+
+    def deliver_push(database, account_id, payload):
         if not push_is_configured():
             return
+        visible = foreground_endpoints(database, account_id)
         subscriptions = database.execute(
             "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE account_id = ?",
-            (recipient_id,),
+            (account_id,),
         ).fetchall()
-        payload = json.dumps({
-            "title": f"New direct message from {sender_username}",
-            "body": "Open PIGIN to read your message.",
-            "url": f"/?view=dms&with={sender_id}",
-            "tag": f"pigin-dm-{sender_id}",
-        })
+        body = json.dumps(payload)
         expired_ids = []
         for subscription in subscriptions:
+            if subscription["endpoint"] in visible:
+                continue
             try:
                 webpush(
                     subscription_info={
@@ -312,7 +424,7 @@ def create_app(test_config=None):
                             "auth": subscription["auth"],
                         },
                     },
-                    data=payload,
+                    data=body,
                     vapid_private_key=app.config["VAPID_PRIVATE_KEY_FILE"],
                     vapid_claims={"sub": app.config["VAPID_SUBJECT"]},
                     ttl=60,
@@ -322,12 +434,57 @@ def create_app(test_config=None):
                 if status_code in {404, 410}:
                     expired_ids.append(subscription["id"])
                 else:
-                    app.logger.warning("DM push delivery failed: %s", error)
+                    app.logger.warning("Push delivery failed: %s", error)
             except Exception:
-                app.logger.exception("Unexpected DM push delivery failure")
+                app.logger.exception("Unexpected push delivery failure")
         if expired_ids:
-            database.executemany("DELETE FROM push_subscriptions WHERE id = ?", ((sid,) for sid in expired_ids))
+            database.executemany(
+                "DELETE FROM push_subscriptions WHERE id = ?",
+                ((sid,) for sid in expired_ids),
+            )
             database.commit()
+
+    def send_room_push(database, author_id, author_username, message_id):
+        recipients = database.execute(
+            "SELECT DISTINCT account_id FROM push_subscriptions WHERE account_id != ?",
+            (author_id,),
+        ).fetchall()
+        for recipient in recipients:
+            account_id = recipient["account_id"]
+            database.execute(
+                """
+                INSERT INTO chat_reads (account_id, last_read_message_id)
+                VALUES (?, ?)
+                ON CONFLICT(account_id) DO NOTHING
+                """,
+                (account_id, max(message_id - 1, 0)),
+            )
+            deliver_push(
+                database,
+                account_id,
+                {
+                    "title": f"New message from {author_username}",
+                    "body": "Open PIGIN to read the chat.",
+                    "url": "/?view=chat",
+                    "tag": "pigin-chat",
+                    "badgeCount": unread_payload(database, account_id)["total"],
+                },
+            )
+        if recipients:
+            database.commit()
+
+    def send_dm_push(database, recipient_id, sender_id, sender_username):
+        deliver_push(
+            database,
+            recipient_id,
+            {
+                "title": f"New direct message from {sender_username}",
+                "body": "Open PIGIN to read your message.",
+                "url": f"/?view=dms&with={sender_id}",
+                "tag": f"pigin-dm-{sender_id}",
+                "badgeCount": unread_payload(database, recipient_id)["total"],
+            },
+        )
 
 
 
@@ -464,6 +621,7 @@ def create_app(test_config=None):
                     (username, password_hash),
                 )
                 account_id = inserted_id(cursor)
+                seed_reads_for_account(database, account_id)
                 database.commit()
             except Exception as error:
                 if not _is_database_error(error):
@@ -609,7 +767,8 @@ def create_app(test_config=None):
                 },
             }
             for row in rows
-        ], warnings=pending_warning_count(database, g.account["id"]), cursor=cursor)
+        ], warnings=pending_warning_count(database, g.account["id"]), cursor=cursor,
+           unread=unread_payload(database, g.account["id"]))
 
     @app.post("/api/messages")
     @login_required
@@ -641,7 +800,54 @@ def create_app(test_config=None):
         )
         message_id = inserted_id(cursor)
         database.commit()
+        send_room_push(database, g.account["id"], g.account["username"], message_id)
         return jsonify(id=message_id), 201
+
+    @app.post("/api/reads")
+    @login_required
+    def api_mark_read():
+        data = request.get_json(silent=True) or {}
+        kind = data.get("kind")
+        database = get_db()
+        if kind == "chat":
+            database.execute(
+                """
+                INSERT INTO chat_reads (account_id, last_read_message_id)
+                VALUES (?, (SELECT COALESCE(MAX(id), 0) FROM messages))
+                ON CONFLICT(account_id) DO UPDATE SET
+                    last_read_message_id = excluded.last_read_message_id
+                """,
+                (g.account["id"],),
+            )
+        elif kind == "dm":
+            partner_id = data.get("partner_id")
+            if type(partner_id) is not int or partner_id < 1 or partner_id == g.account["id"]:
+                return jsonify(error="Invalid conversation."), 400
+            if database.execute("SELECT 1 FROM accounts WHERE id = ?", (partner_id,)).fetchone() is None:
+                return jsonify(error="Account not found."), 404
+            database.execute(
+                """
+                INSERT INTO dm_reads (account_id, partner_id, last_read_message_id)
+                SELECT ?, ?, COALESCE(MAX(id), 0)
+                FROM direct_messages
+                WHERE (sender_id = ? AND recipient_id = ?)
+                   OR (sender_id = ? AND recipient_id = ?)
+                ON CONFLICT(account_id, partner_id) DO UPDATE SET
+                    last_read_message_id = excluded.last_read_message_id
+                """,
+                (
+                    g.account["id"],
+                    partner_id,
+                    g.account["id"],
+                    partner_id,
+                    partner_id,
+                    g.account["id"],
+                ),
+            )
+        else:
+            return jsonify(error="Invalid read target."), 400
+        database.commit()
+        return jsonify(unread_payload(database, g.account["id"]))
 
     @app.get("/api/dms")
     @login_required
@@ -831,6 +1037,65 @@ def create_app(test_config=None):
             "DELETE FROM push_subscriptions WHERE account_id = ? AND endpoint = ?",
             (g.account["id"], endpoint),
         )
+        database.execute(
+            "DELETE FROM push_presence WHERE account_id = ? AND endpoint = ?",
+            (g.account["id"], endpoint),
+        )
+        database.commit()
+        return jsonify(ok=True)
+
+    @app.post("/api/push/presence")
+    @login_required
+    def api_push_presence():
+        data = request.get_json(silent=True) or {}
+        endpoint = data.get("endpoint")
+        client_id = data.get("client_id")
+        visible = data.get("visible")
+        reported_at = data.get("reported_at")
+        if (
+            not isinstance(endpoint, str)
+            or not endpoint.startswith("https://")
+            or len(endpoint) > 2048
+            or not isinstance(client_id, str)
+            or len(client_id) < 8
+            or len(client_id) > 64
+            or any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for character in client_id)
+            or not isinstance(visible, bool)
+            or type(reported_at) is not int
+        ):
+            return jsonify(error="Invalid presence update."), 400
+        now_ms = int(time.time() * 1000)
+        if reported_at > now_ms + 5 * 60 * 1000:
+            return jsonify(error="Invalid presence update."), 400
+        database = get_db()
+        owned = database.execute(
+            "SELECT 1 FROM push_subscriptions WHERE account_id = ? AND endpoint = ?",
+            (g.account["id"], endpoint),
+        ).fetchone()
+        if owned is None:
+            return jsonify(ok=True)
+        existing = database.execute(
+            "SELECT reported_at FROM push_presence WHERE endpoint = ? AND client_id = ?",
+            (endpoint, client_id),
+        ).fetchone()
+        if existing and reported_at < existing["reported_at"]:
+            return jsonify(ok=True)
+        visible_until = int(time.time()) + PRESENCE_LEASE_SECONDS if visible else 0
+        database.execute(
+            """
+            INSERT INTO push_presence (endpoint, client_id, account_id, visible_until, reported_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(endpoint, client_id) DO UPDATE SET
+                account_id = excluded.account_id,
+                visible_until = excluded.visible_until,
+                reported_at = excluded.reported_at
+            """,
+            (endpoint, client_id, g.account["id"], visible_until, reported_at),
+        )
+        database.execute(
+            "DELETE FROM push_presence WHERE reported_at < ?",
+            (now_ms - 24 * 60 * 60 * 1000,),
+        )
         database.commit()
         return jsonify(ok=True)
 
@@ -935,10 +1200,11 @@ def create_app(test_config=None):
         password = click.prompt("Set Cricket's password", hide_input=True, confirmation_prompt=True)
         if not 8 <= len(password) <= 1024:
             raise click.ClickException("Password must be between 8 and 1024 characters.")
-        database.execute(
-            "INSERT INTO accounts (username, password_hash, role) VALUES ('Cricket', ?, 'admin')",
+        cursor = database.execute(
+            "INSERT INTO accounts (username, password_hash, role) VALUES ('Cricket', ?, 'admin') RETURNING id",
             (generate_password_hash(password),),
         )
+        seed_reads_for_account(database, inserted_id(cursor))
         database.commit()
         click.echo("Cricket admin account created.")
 
@@ -1015,7 +1281,9 @@ def create_app(test_config=None):
         if not app.config["USE_SUPABASE"]:
             raise click.ClickException("Set SUPABASE_DB_URL before importing.")
         path = sqlite_path or app.config["DATABASE"]
-        counts = copy_sqlite_to_postgres(get_db(), path)
+        database = get_db()
+        counts = copy_sqlite_to_postgres(database, path)
+        seed_missing_read_cursors(database)
         click.echo(
             "Copied {accounts} accounts, {messages} room messages, and {direct_messages} direct messages.".format(
                 **counts

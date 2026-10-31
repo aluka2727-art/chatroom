@@ -19,6 +19,10 @@ const warningAction = document.querySelector("#warningAction");
 const adminTab = document.querySelector("#adminTab");
 const chatTab = document.querySelector("#chatTab");
 const dmTab = document.querySelector("#dmTab");
+const menuButton = document.querySelector("#menuButton");
+const menuBackdrop = document.querySelector("#menuBackdrop");
+const sideTabs = document.querySelector("#sideTabs");
+const compactMenu = window.matchMedia("(max-width: 900px)");
 const chatView = document.querySelector("#chatView");
 const adminPanel = document.querySelector("#adminPanel");
 const adminError = document.querySelector("#adminError");
@@ -45,6 +49,153 @@ let pollingTimer;
 let warningKind = null;
 let pendingDmPartnerId = null;
 let pushHint = "";
+let pushEndpoint = "";
+let presenceClientMemory = "";
+let readSyncEpoch = 0;
+let displayedBadgeCount = null;
+let unreadState = { group: 0, dms: 0, total: 0, conversations: {} };
+
+function presenceClientId() {
+  if (presenceClientMemory) return presenceClientMemory;
+  const key = "pigin-presence-client";
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const bytes = new Uint8Array(12);
+    crypto.getRandomValues(bytes);
+    const id = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+    sessionStorage.setItem(key, id);
+    return id;
+  } catch {
+    presenceClientMemory = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
+    return presenceClientMemory;
+  }
+}
+
+function updateDmUnreadDots() {
+  for (const button of dmContacts.querySelectorAll(".dm-contact")) {
+    const count = unreadState.conversations[button.dataset.accountId] || 0;
+    button.classList.toggle("has-unread", count > 0);
+    const name = button.querySelector(".dm-contact-name")?.textContent || "Conversation";
+    if (count > 0) button.setAttribute("aria-label", `${name}, ${count} unread`);
+    else button.removeAttribute("aria-label");
+  }
+}
+
+function applyUnread(summary) {
+  const conversations = { ...(summary?.conversations || {}) };
+  let group = summary?.group || 0;
+  let direct = summary?.dms || 0;
+  if (document.visibilityState === "visible" && activeView === "chat") group = 0;
+  if (document.visibilityState === "visible" && activeView === "dms" && selectedDmUser) {
+    const key = String(selectedDmUser.id);
+    direct -= conversations[key] || 0;
+    delete conversations[key];
+  }
+  group = Math.max(0, group);
+  direct = Math.max(0, direct);
+  unreadState = { group, dms: direct, total: group + direct, conversations };
+  chatTab.classList.toggle("has-unread", group > 0);
+  dmTab.classList.toggle("has-unread", direct > 0);
+  chatTab.setAttribute("aria-label", group > 0 ? `Chat, ${group} unread` : "Chat");
+  dmTab.setAttribute("aria-label", direct > 0 ? `Direct messages, ${direct} unread` : "Direct messages");
+  updateMenuButton();
+  updateDmUnreadDots();
+  updateAppBadge(unreadState.total);
+}
+
+function updateFaviconBadge(count) {
+  const links = [...document.querySelectorAll("link[rel='icon']")];
+  for (const link of links) {
+    if (!link.dataset.baseHref) link.dataset.baseHref = link.getAttribute("href");
+  }
+  if (!count) {
+    for (const link of links) link.setAttribute("href", link.dataset.baseHref);
+    return;
+  }
+  const source = links.find(link => link.dataset.baseHref?.includes("favicon-32")) || links[0];
+  if (!source?.dataset.baseHref) return;
+  const image = new Image();
+  image.onload = () => {
+    if (displayedBadgeCount !== count) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = 32;
+    canvas.height = 32;
+    const context = canvas.getContext("2d");
+    context.drawImage(image, 0, 0, 32, 32);
+    context.beginPath();
+    context.fillStyle = "#d23b2f";
+    context.arc(23, 9, 9, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = "#fff";
+    context.font = "700 12px sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(count > 9 ? "9+" : String(count), 23, 9.5);
+    const url = canvas.toDataURL("image/png");
+    for (const link of links) link.setAttribute("href", url);
+  };
+  image.src = source.dataset.baseHref;
+}
+
+function updateAppBadge(total) {
+  const count = Math.max(0, Number(total) || 0);
+  const badge = count > 0 && navigator.setAppBadge
+    ? navigator.setAppBadge(count)
+    : navigator.clearAppBadge?.();
+  Promise.resolve(badge).catch(() => {});
+  if (displayedBadgeCount === count) return;
+  displayedBadgeCount = count;
+  updateFaviconBadge(count);
+}
+
+async function syncReadState(fallback, force = false) {
+  const epoch = ++readSyncEpoch;
+  const viewingChat = document.visibilityState === "visible" && activeView === "chat";
+  const viewingDm = document.visibilityState === "visible" && activeView === "dms" && selectedDmUser;
+  try {
+    let summary = fallback;
+    if (viewingChat && (force || (fallback?.group || 0) > 0)) {
+      summary = await api("/api/reads", { method: "POST", body: JSON.stringify({ kind: "chat" }) });
+    } else if (
+      viewingDm
+      && (force || (fallback?.conversations?.[String(selectedDmUser.id)] || 0) > 0)
+    ) {
+      summary = await api("/api/reads", {
+        method: "POST",
+        body: JSON.stringify({ kind: "dm", partner_id: selectedDmUser.id }),
+      });
+    }
+    if (epoch !== readSyncEpoch || !summary) return;
+    applyUnread(summary);
+  } catch (error) {
+    if (epoch === readSyncEpoch && error.status === 401) showLogin();
+  }
+}
+
+async function reportPresence(visible) {
+  if (!currentUser || !pushEndpoint) return;
+  try {
+    await api("/api/push/presence", {
+      method: "POST",
+      body: JSON.stringify({
+        endpoint: pushEndpoint,
+        client_id: presenceClientId(),
+        visible: Boolean(visible),
+        reported_at: Date.now(),
+      }),
+    });
+  } catch (error) {
+    if (error.status === 401) showLogin();
+  }
+}
+
+async function closeAppNotifications() {
+  if (!("serviceWorker" in navigator)) return;
+  const registration = await navigator.serviceWorker.getRegistration();
+  const notifications = await registration?.getNotifications?.() || [];
+  for (const notification of notifications) notification.close();
+}
 
 async function api(path, options = {}, retryCsrf = true) {
   const method = (options.method || "GET").toUpperCase();
@@ -113,7 +264,10 @@ function showLogin() {
   dmMessageInput.placeholder = "Choose someone to message...";
   dmSendButton.disabled = true;
   pendingDmPartnerId = null;
+  pushEndpoint = "";
   resetPushToggle();
+  setMenuOpen(false);
+  applyUnread({ group: 0, dms: 0, total: 0, conversations: {} });
   activeView = "chat";
   adminPanel.hidden = true;
   dmPanel.hidden = true;
@@ -318,23 +472,25 @@ async function loadMessages() {
       empty.textContent = "It's quiet in here.";
       feed.replaceChildren(empty);
       messageCursor = data.cursor || 0;
-      return;
-    }
-    for (const message of messages) {
-      document.querySelector(".empty-state")?.remove();
-      addMessage(message);
-      if (!initialLoad && message.is_deleted && message.is_own) {
-        showWarning("message", "An admin deleted one of your messages. Deleted messages remain in the chat as [DELETED].");
+    } else {
+      for (const message of messages) {
+        document.querySelector(".empty-state")?.remove();
+        addMessage(message);
+        if (!initialLoad && message.is_deleted && message.is_own) {
+          showWarning("message", "An admin deleted one of your messages. Deleted messages remain in the chat as [DELETED].");
+        }
+      }
+      messageCursor = data.cursor || messageCursor;
+      if (data.warnings && warningKind === null) {
+        showWarning("message", "An admin deleted one or more of your messages. Deleted messages remain in the chat as [DELETED].");
+      }
+      if (messages.length) {
+        const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth");
       }
     }
-    messageCursor = data.cursor || messageCursor;
-    if (data.warnings && warningKind === null) {
-      showWarning("message", "An admin deleted one or more of your messages. Deleted messages remain in the chat as [DELETED].");
-    }
-    if (messages.length) {
-      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth");
-    }
+    await syncReadState(data.unread);
+    if (document.visibilityState === "visible") reportPresence(true);
   } catch (error) {
     if (error.accountDeleted) {
       showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
@@ -353,7 +509,10 @@ async function initialize() {
     if (data.account_deleted) {
       showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
     } else if (data.user) showRoom(data.user);
-    else setAuthMode("create");
+    else {
+      setAuthMode("create");
+      updateAppBadge(0);
+    }
   } catch {
     authError.textContent = "Could not reach the chat server. Refresh to try again.";
     authError.hidden = false;
@@ -384,6 +543,7 @@ function renderDmContacts(contacts) {
     button.className = "dm-contact";
     button.type = "button";
     button.classList.toggle("active", selectedDmUser?.id === contact.id);
+    button.dataset.accountId = String(contact.id);
     button.setAttribute("aria-pressed", String(selectedDmUser?.id === contact.id));
     const name = document.createElement("span");
     name.className = "dm-contact-name";
@@ -391,10 +551,14 @@ function renderDmContacts(contacts) {
     const preview = document.createElement("span");
     preview.className = "dm-contact-preview";
     preview.textContent = contact.last_message || "Start a conversation";
-    button.append(name, preview);
+    const dot = document.createElement("span");
+    dot.className = "unread-dot";
+    dot.setAttribute("aria-hidden", "true");
+    button.append(name, preview, dot);
     button.addEventListener("click", () => selectDmContact(contact));
     dmContacts.append(button);
   }
+  updateDmUnreadDots();
 }
 
 async function loadDmContacts() {
@@ -460,6 +624,7 @@ function selectDmContact(contact) {
   renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
   showDmError("");
   loadDmMessages();
+  syncReadState(unreadState, true);
 }
 
 function addDmMessage(message) {
@@ -725,7 +890,9 @@ async function refreshPushToggle() {
     pushToggle.dataset.publicKey = config.public_key;
     const registration = await navigator.serviceWorker.register("/sw.js");
     const subscription = await registration.pushManager.getSubscription();
+    pushEndpoint = subscription?.endpoint || "";
     setPushToggle(subscription ? "on" : "off");
+    if (pushEndpoint) reportPresence(document.visibilityState === "visible");
   } catch (error) {
     setPushToggle("unavailable", error.message || "Notifications are unavailable in this browser.");
   }
@@ -746,6 +913,7 @@ async function disablePushSubscription() {
     // Still remove the browser subscription so the next account on this device does not inherit it.
   }
   await subscription.unsubscribe();
+  pushEndpoint = "";
 }
 
 async function togglePushNotifications() {
@@ -765,6 +933,7 @@ async function togglePushNotifications() {
         method: "DELETE",
         body: JSON.stringify({ endpoint }),
       });
+      pushEndpoint = "";
       setPushToggle("off");
       showDmError("");
       return;
@@ -783,12 +952,38 @@ async function togglePushNotifications() {
       method: "POST",
       body: JSON.stringify(subscription.toJSON()),
     });
+    pushEndpoint = subscription.endpoint;
     setPushToggle("on");
+    reportPresence(document.visibilityState === "visible");
     showDmError("");
   } catch (error) {
     showDmError(error.message || "Could not update notifications.");
     await refreshPushToggle();
   }
+}
+
+function setMenuOpen(open) {
+  document.body.classList.toggle("menu-open", open);
+  updateMenuButton();
+}
+
+function updateMenuButton() {
+  const open = document.body.classList.contains("menu-open");
+  const unread = (unreadState.group || 0) + (unreadState.dms || 0);
+  menuButton.classList.toggle("has-unread", unread > 0);
+  menuButton.setAttribute("aria-expanded", String(open));
+  menuBackdrop.setAttribute("aria-hidden", String(!open));
+  sideTabs.inert = compactMenu.matches && !open;
+  const action = open ? "Close menu" : "Open menu";
+  menuButton.setAttribute("aria-label", unread > 0 ? `${action}, ${unread} unread` : action);
+}
+
+function fitAppToViewport() {
+  const viewport = window.visualViewport;
+  const height = viewport?.height || window.innerHeight;
+  const offset = viewport?.offsetTop || 0;
+  document.documentElement.style.setProperty("--app-height", `${Math.round(height)}px`);
+  document.documentElement.style.setProperty("--app-offset", `${Math.round(offset)}px`);
 }
 
 function setRoomView(view) {
@@ -812,6 +1007,8 @@ function setRoomView(view) {
     loadDmMessages();
   }
   if (showAdmin) loadAdminData();
+  if (showChat || showDms) syncReadState(unreadState, true);
+  setMenuOpen(false);
 }
 
 document.querySelector("#createMode").addEventListener("click", () => setAuthMode("create"));
@@ -819,6 +1016,25 @@ document.querySelector("#signInMode").addEventListener("click", () => setAuthMod
 chatTab.addEventListener("click", () => setRoomView("chat"));
 dmTab.addEventListener("click", () => setRoomView("dms"));
 adminTab.addEventListener("click", () => setRoomView("admin"));
+menuButton.addEventListener("click", () => {
+  setMenuOpen(!document.body.classList.contains("menu-open"));
+});
+menuBackdrop.addEventListener("click", () => setMenuOpen(false));
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && document.body.classList.contains("menu-open")) setMenuOpen(false);
+});
+fitAppToViewport();
+window.addEventListener("resize", fitAppToViewport);
+compactMenu.addEventListener("change", event => {
+  if (!event.matches) setMenuOpen(false);
+  else updateMenuButton();
+});
+updateMenuButton();
+window.visualViewport?.addEventListener("resize", fitAppToViewport);
+window.visualViewport?.addEventListener("scroll", () => {
+  fitAppToViewport();
+  if (window.scrollY) window.scrollTo(0, 0);
+});
 document.querySelector("#adminRefresh").addEventListener("click", loadAdminData);
 document.querySelector("#dmRefresh").addEventListener("click", () => {
   dmContactsSnapshot = "";
@@ -887,16 +1103,69 @@ document.querySelector("#switchAccount").addEventListener("click", async () => {
   }
 });
 pushToggle.addEventListener("click", togglePushNotifications);
+function openNotificationTarget(url) {
+  if (!currentUser || !url) return;
+  const target = new URL(url, window.location.origin);
+  const view = target.searchParams.get("view");
+  if (view === "chat") {
+    setRoomView("chat");
+    return;
+  }
+  if (view !== "dms") return;
+  const partnerId = Number(target.searchParams.get("with"));
+  if (!Number.isInteger(partnerId) || partnerId < 1) {
+    setRoomView("dms");
+    return;
+  }
+  pendingDmPartnerId = partnerId;
+  setRoomView("dms");
+}
+
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", event => {
-    if (event.data?.type !== "open-dm" || !currentUser) return;
-    const target = new URL(event.data.url, window.location.origin);
-    const partnerId = Number(target.searchParams.get("with"));
-    if (target.searchParams.get("view") !== "dms" || !Number.isInteger(partnerId) || partnerId < 1) return;
-    pendingDmPartnerId = partnerId;
-    setRoomView("dms");
+    if (!currentUser || !event.data) return;
+    if (event.data.type === "unread-refresh") {
+      loadMessages();
+      if (activeView === "dms") {
+        loadDmContacts();
+        loadDmMessages();
+      }
+      return;
+    }
+    if (event.data.type === "open-target" || event.data.type === "open-dm") {
+      openNotificationTarget(event.data.url);
+    }
   });
 }
+
+document.addEventListener("visibilitychange", () => {
+  const visible = document.visibilityState === "visible";
+  reportPresence(visible);
+  if (!visible || !currentUser) return;
+  closeAppNotifications();
+  syncReadState(unreadState, true);
+  loadMessages();
+});
+
+window.addEventListener("pagehide", () => {
+  if (!currentUser || !pushEndpoint || !csrfToken) return;
+  fetch("/api/push/presence", {
+    method: "POST",
+    keepalive: true,
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify({
+      endpoint: pushEndpoint,
+      client_id: presenceClientId(),
+      visible: false,
+      reported_at: Date.now(),
+    }),
+  }).catch(() => {});
+});
 
 messageInput.addEventListener("input", () => {
   sendButton.disabled = !messageInput.value.trim();
