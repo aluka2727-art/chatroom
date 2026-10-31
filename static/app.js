@@ -19,12 +19,14 @@ const warningAction = document.querySelector("#warningAction");
 const adminTab = document.querySelector("#adminTab");
 const chatTab = document.querySelector("#chatTab");
 const dmTab = document.querySelector("#dmTab");
+const settingsTab = document.querySelector("#settingsTab");
 const menuButton = document.querySelector("#menuButton");
 const menuBackdrop = document.querySelector("#menuBackdrop");
 const sideTabs = document.querySelector("#sideTabs");
 const compactMenu = window.matchMedia("(max-width: 900px)");
 const chatView = document.querySelector("#chatView");
 const adminPanel = document.querySelector("#adminPanel");
+const settingsPanel = document.querySelector("#settingsPanel");
 const adminError = document.querySelector("#adminError");
 const dmPanel = document.querySelector("#dmPanel");
 const dmError = document.querySelector("#dmError");
@@ -35,6 +37,8 @@ const dmSendButton = document.querySelector("#dmSendButton");
 const dmReplyPreview = document.querySelector("#dmReplyPreview");
 const dmReplyPreviewText = document.querySelector("#dmReplyPreviewText");
 const pushToggle = document.querySelector("#pushToggle");
+const pushHintText = document.querySelector("#pushHintText");
+const themeToggle = document.querySelector("#themeToggle");
 let currentUser = null;
 let csrfToken = "";
 let messageCursor = 0;
@@ -50,6 +54,7 @@ let warningKind = null;
 let pendingDmPartnerId = null;
 let pushHint = "";
 let pushEndpoint = "";
+let enablingPush = false;
 let presenceClientMemory = "";
 let readSyncEpoch = 0;
 let displayedBadgeCount = null;
@@ -270,12 +275,15 @@ function showLogin() {
   applyUnread({ group: 0, dms: 0, total: 0, conversations: {} });
   activeView = "chat";
   adminPanel.hidden = true;
+  settingsPanel.hidden = true;
   dmPanel.hidden = true;
   chatView.hidden = false;
   chatTab.classList.add("active");
   chatTab.setAttribute("aria-pressed", "true");
   dmTab.classList.remove("active");
   dmTab.setAttribute("aria-pressed", "false");
+  settingsTab.classList.remove("active");
+  settingsTab.setAttribute("aria-pressed", "false");
   adminTab.classList.remove("active");
   adminTab.setAttribute("aria-pressed", "false");
   room.hidden = true;
@@ -319,11 +327,14 @@ function showRoom(user) {
   adminTab.hidden = !isAdmin;
   chatView.hidden = false;
   dmPanel.hidden = true;
+  settingsPanel.hidden = true;
   adminPanel.hidden = true;
   chatTab.classList.add("active");
   chatTab.setAttribute("aria-pressed", "true");
   dmTab.classList.remove("active");
   dmTab.setAttribute("aria-pressed", "false");
+  settingsTab.classList.remove("active");
+  settingsTab.setAttribute("aria-pressed", "false");
   adminTab.classList.remove("active");
   adminTab.setAttribute("aria-pressed", "false");
   loadMessages();
@@ -827,12 +838,35 @@ function isHomeScreenApp() {
   return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
 }
 
+function notificationsWanted() {
+  try {
+    return localStorage.getItem("pigin-notifications") !== "off";
+  } catch {
+    return true;
+  }
+}
+
+function setNotificationsWanted(on) {
+  try {
+    if (on) localStorage.removeItem("pigin-notifications");
+    else localStorage.setItem("pigin-notifications", "off");
+  } catch {
+    // The choice still applies for this visit when storage is blocked.
+  }
+}
+
+function setPushHint(text) {
+  pushHint = text;
+  pushHintText.textContent = text || "Alerts for new chat and direct messages.";
+}
+
 function resetPushToggle() {
   pushHint = "";
   pushToggle.disabled = true;
   pushToggle.dataset.state = "";
   pushToggle.setAttribute("aria-pressed", "false");
   pushToggle.textContent = "Enable notifications";
+  pushHintText.textContent = "Alerts for new chat and direct messages.";
   delete pushToggle.dataset.publicKey;
 }
 
@@ -844,12 +878,15 @@ function setPushToggle(state, hint = "") {
     off: "Enable notifications",
     on: "Notifications on",
   };
-  pushHint = hint;
+  const defaults = {
+    on: "You'll get alerts for new chat and direct messages.",
+    off: "Notifications are off on this device.",
+  };
   pushToggle.dataset.state = state;
   pushToggle.disabled = state !== "on" && state !== "off" && state !== "install";
   pushToggle.setAttribute("aria-pressed", String(state === "on"));
   pushToggle.textContent = labels[state];
-  if (activeView === "dms") showDmError(hint);
+  setPushHint(hint || defaults[state] || "");
 }
 
 function urlBase64ToUint8Array(value) {
@@ -867,7 +904,7 @@ async function refreshPushToggle() {
     return;
   }
   if (isIos() && !isHomeScreenApp()) {
-    setPushToggle("install", "iPhone only delivers these alerts from the Home Screen. In Safari, tap Share, then Add to Home Screen. Open PIGIN from that icon and tap Enable notifications.");
+    setPushToggle("install", "iPhone only delivers these alerts from the Home Screen. In Safari, tap Share, then Add to Home Screen, then open PIGIN from that icon.");
     return;
   }
   if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
@@ -891,8 +928,17 @@ async function refreshPushToggle() {
     const registration = await navigator.serviceWorker.register("/sw.js");
     const subscription = await registration.pushManager.getSubscription();
     pushEndpoint = subscription?.endpoint || "";
-    setPushToggle(subscription ? "on" : "off");
-    if (pushEndpoint) reportPresence(document.visibilityState === "visible");
+    if (subscription) {
+      setNotificationsWanted(true);
+      setPushToggle("on");
+      reportPresence(document.visibilityState === "visible");
+      return;
+    }
+    if (notificationsWanted()) {
+      await enablePushNotifications();
+      return;
+    }
+    setPushToggle("off");
   } catch (error) {
     setPushToggle("unavailable", error.message || "Notifications are unavailable in this browser.");
   }
@@ -916,32 +962,19 @@ async function disablePushSubscription() {
   pushEndpoint = "";
 }
 
-async function togglePushNotifications() {
-  if (!currentUser || pushToggle.disabled) return;
-  if (pushToggle.dataset.state === "install") {
-    showDmError(pushHint);
-    return;
-  }
+async function enablePushNotifications() {
+  if (enablingPush || !currentUser || !pushToggle.dataset.publicKey) return;
+  enablingPush = true;
   pushToggle.disabled = true;
+  pushToggle.textContent = "Notifications on";
   try {
     const registration = await navigator.serviceWorker.register("/sw.js");
-    const existing = await registration.pushManager.getSubscription();
-    if (existing) {
-      const endpoint = existing.endpoint;
-      await existing.unsubscribe();
-      await api("/api/push/subscriptions", {
-        method: "DELETE",
-        body: JSON.stringify({ endpoint }),
-      });
-      pushEndpoint = "";
-      setPushToggle("off");
-      showDmError("");
-      return;
-    }
-    const permission = await Notification.requestPermission();
+    const permission = Notification.permission === "granted"
+      ? "granted"
+      : await Notification.requestPermission();
     if (permission !== "granted") {
       setPushToggle(permission === "denied" ? "blocked" : "off");
-      if (permission === "denied") showDmError("Notification permission was denied.");
+      if (permission === "denied") setPushHint("Notification permission was denied. Allow notifications for PIGIN in your phone settings.");
       return;
     }
     const subscription = await registration.pushManager.subscribe({
@@ -953,12 +986,47 @@ async function togglePushNotifications() {
       body: JSON.stringify(subscription.toJSON()),
     });
     pushEndpoint = subscription.endpoint;
+    setNotificationsWanted(true);
     setPushToggle("on");
     reportPresence(document.visibilityState === "visible");
-    showDmError("");
   } catch (error) {
-    showDmError(error.message || "Could not update notifications.");
-    await refreshPushToggle();
+    setPushToggle("off", error.message || "Could not turn notifications on.");
+  } finally {
+    enablingPush = false;
+  }
+}
+
+async function togglePushNotifications() {
+  if (!currentUser || pushToggle.disabled || enablingPush) return;
+  if (pushToggle.dataset.state === "install") return;
+  if (pushToggle.dataset.state === "on") {
+    setNotificationsWanted(false);
+    pushToggle.disabled = true;
+    try {
+      await disablePushSubscription();
+      setPushToggle("off");
+    } catch (error) {
+      setPushToggle("on", error.message || "Could not update notifications.");
+    }
+    return;
+  }
+  setNotificationsWanted(true);
+  await enablePushNotifications();
+}
+
+function applyTheme(theme) {
+  const dark = theme === "dark";
+  if (dark) document.documentElement.dataset.theme = "dark";
+  else delete document.documentElement.dataset.theme;
+  const themeColor = document.querySelector('meta[name="theme-color"]');
+  if (themeColor) themeColor.setAttribute("content", dark ? "#121816" : "#f6f7f3");
+  themeToggle.setAttribute("aria-pressed", String(dark));
+  themeToggle.textContent = dark ? "Dark mode on" : "Dark mode off";
+  try {
+    if (dark) localStorage.setItem("pigin-theme", "dark");
+    else localStorage.removeItem("pigin-theme");
+  } catch {
+    // The theme still applies for this visit when storage is blocked.
   }
 }
 
@@ -991,18 +1059,21 @@ function setRoomView(view) {
   activeView = view;
   const showChat = view === "chat";
   const showDms = view === "dms";
+  const showSettings = view === "settings";
   const showAdmin = view === "admin";
   chatView.hidden = !showChat;
   dmPanel.hidden = !showDms;
+  settingsPanel.hidden = !showSettings;
   adminPanel.hidden = !showAdmin;
   chatTab.classList.toggle("active", showChat);
   chatTab.setAttribute("aria-pressed", String(showChat));
   dmTab.classList.toggle("active", showDms);
   dmTab.setAttribute("aria-pressed", String(showDms));
+  settingsTab.classList.toggle("active", showSettings);
+  settingsTab.setAttribute("aria-pressed", String(showSettings));
   adminTab.classList.toggle("active", showAdmin);
   adminTab.setAttribute("aria-pressed", String(showAdmin));
   if (showDms) {
-    showDmError(pushHint);
     loadDmContacts();
     loadDmMessages();
   }
@@ -1015,6 +1086,7 @@ document.querySelector("#createMode").addEventListener("click", () => setAuthMod
 document.querySelector("#signInMode").addEventListener("click", () => setAuthMode("signin"));
 chatTab.addEventListener("click", () => setRoomView("chat"));
 dmTab.addEventListener("click", () => setRoomView("dms"));
+settingsTab.addEventListener("click", () => setRoomView("settings"));
 adminTab.addEventListener("click", () => setRoomView("admin"));
 menuButton.addEventListener("click", () => {
   setMenuOpen(!document.body.classList.contains("menu-open"));
@@ -1030,6 +1102,7 @@ compactMenu.addEventListener("change", event => {
   else updateMenuButton();
 });
 updateMenuButton();
+applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
 window.visualViewport?.addEventListener("resize", fitAppToViewport);
 window.visualViewport?.addEventListener("scroll", () => {
   fitAppToViewport();
@@ -1103,6 +1176,9 @@ document.querySelector("#switchAccount").addEventListener("click", async () => {
   }
 });
 pushToggle.addEventListener("click", togglePushNotifications);
+themeToggle.addEventListener("click", () => {
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+});
 function openNotificationTarget(url) {
   if (!currentUser || !url) return;
   const target = new URL(url, window.location.origin);

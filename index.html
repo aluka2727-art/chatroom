@@ -4,6 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f6f7f3">
+  <script>
+    try {
+      if (localStorage.getItem("pigin-theme") === "dark") {
+        document.documentElement.dataset.theme = "dark";
+        document.querySelector('meta[name="theme-color"]').setAttribute("content", "#121816");
+      }
+    } catch (error) {}
+  </script>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -16,8 +24,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='mobile-menu') }}">
-  <script src="{{ url_for('static', filename='app.js', v='mobile-menu-20261030') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='settings-171') }}">
+  <script src="{{ url_for('static', filename='app.js', v='settings-171') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -79,6 +87,9 @@
             <span class="side-tab-label">DMS</span>
             <span class="unread-dot" aria-hidden="true"></span>
           </button>
+          <button class="side-tab" id="settingsTab" type="button" aria-pressed="false" aria-label="Settings">
+            <span class="side-tab-label">SETTINGS</span>
+          </button>
           <button class="side-tab" id="adminTab" type="button" aria-pressed="false" hidden>
             <span class="side-tab-label">ADMIN</span>
           </button>
@@ -108,10 +119,7 @@
           <section class="dm-panel" id="dmPanel" aria-label="Direct messages" hidden>
             <header class="admin-panel-heading">
               <div><h2>Direct messages</h2><p>Private conversations with room members</p></div>
-              <div class="dm-panel-actions">
-                <button class="push-toggle" id="pushToggle" type="button" aria-pressed="false" disabled>Enable notifications</button>
-                <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
-              </div>
+              <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
             </header>
             <p class="admin-error" id="dmError" role="alert" hidden></p>
             <div class="dm-layout">
@@ -143,6 +151,27 @@
               </section>
             </div>
           </section>
+          <section class="admin-panel" id="settingsPanel" aria-label="Settings" hidden>
+            <header class="admin-panel-heading">
+              <div><h2>Settings</h2><p>Notifications and appearance</p></div>
+            </header>
+            <div class="settings-list">
+              <div class="settings-row">
+                <div class="settings-copy">
+                  <h3>Notifications</h3>
+                  <p id="pushHintText">Alerts for new chat and direct messages.</p>
+                </div>
+                <button class="settings-toggle" id="pushToggle" type="button" aria-pressed="false" disabled>Enable notifications</button>
+              </div>
+              <div class="settings-row">
+                <div class="settings-copy">
+                  <h3>Dark mode</h3>
+                  <p>Join the dark side.</p>
+                </div>
+                <button class="settings-toggle" id="themeToggle" type="button" aria-pressed="false">Dark mode off</button>
+              </div>
+            </div>
+          </section>
           <section class="admin-panel" id="adminPanel" aria-label="Admin controls" hidden>
             <header class="admin-panel-heading">
               <div><h2>Admin</h2><p>Manage accounts and messages</p></div>
@@ -169,7 +198,7 @@
         <button class="login-submit" id="warningAction" type="button">Continue</button>
       </section>
     </div>
-    <footer class="app-footer">v1.7.0</footer>
+    <footer class="app-footer">v1.7.1</footer>
   </div>
 </body>
 </html>
