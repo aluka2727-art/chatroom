@@ -52,6 +52,8 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"Add to Home Screen", script.data)
         self.assertIn(b"pigin-notifications", script.data)
         self.assertIn(b"pigin-theme", script.data)
+        self.assertIn(b"message-image", script.data)
+        self.assertIn(b"noopener noreferrer", script.data)
         script.close()
         manifest = self.client.get("/manifest.webmanifest")
         self.assertEqual(manifest.status_code, 200)

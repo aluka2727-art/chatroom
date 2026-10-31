@@ -337,6 +337,7 @@ function showRoom(user) {
   settingsTab.setAttribute("aria-pressed", "false");
   adminTab.classList.remove("active");
   adminTab.setAttribute("aria-pressed", "false");
+  updateRoomTitle("chat");
   loadMessages();
   clearInterval(pollingTimer);
   pollingTimer = setInterval(() => {
@@ -366,6 +367,95 @@ function showWarning(kind, message) {
   warningAction.focus();
 }
 
+function linkHref(value) {
+  const candidate = value.startsWith("www.") ? `https://${value}` : value;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function splitTrailingPunctuation(value) {
+  let end = value.length;
+  while (end > 0) {
+    const mark = value[end - 1];
+    if (!/[),.;:!?\]]$/.test(mark)) break;
+    if (mark === ")" || mark === "]") {
+      const head = value.slice(0, end);
+      const opens = (head.match(/\(/g) || []).length + (head.match(/\[/g) || []).length;
+      const closes = (head.match(/\)/g) || []).length + (head.match(/\]/g) || []).length;
+      if (opens >= closes) break;
+    }
+    end -= 1;
+  }
+  return [value.slice(0, end), value.slice(end)];
+}
+
+function isImageHref(href) {
+  try {
+    return /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(new URL(href).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function createMessageLink(href, label) {
+  const link = document.createElement("a");
+  link.className = "message-link";
+  link.href = href;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = label;
+  return link;
+}
+
+function createMessageImage(href) {
+  const link = document.createElement("a");
+  link.className = "message-link message-image-link";
+  link.href = href;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  const image = document.createElement("img");
+  image.className = "message-image";
+  image.src = href;
+  image.alt = "Shared image";
+  image.loading = "lazy";
+  image.decoding = "async";
+  image.referrerPolicy = "no-referrer";
+  image.addEventListener("error", () => {
+    link.replaceWith(createMessageLink(href, href));
+  });
+  link.append(image);
+  return link;
+}
+
+function fillRichText(element, text, { images = true } = {}) {
+  element.replaceChildren();
+  const pattern = /(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+  let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    const raw = match[0];
+    const start = match.index;
+    if (start > 0 && /[A-Za-z0-9/]/.test(text[start - 1])) {
+      element.append(document.createTextNode(text.slice(cursor, start + raw.length)));
+      cursor = start + raw.length;
+      continue;
+    }
+    if (start > cursor) element.append(document.createTextNode(text.slice(cursor, start)));
+    const [core, trailing] = splitTrailingPunctuation(raw);
+    const href = linkHref(core);
+    if (href && images && isImageHref(href)) element.append(createMessageImage(href));
+    else if (href) element.append(createMessageLink(href, core));
+    else element.append(document.createTextNode(core));
+    if (trailing) element.append(document.createTextNode(trailing));
+    cursor = start + raw.length;
+  }
+  if (cursor < text.length) element.append(document.createTextNode(text.slice(cursor)));
+}
+
 function addMessage(message) {
   const article = document.createElement("article");
   article.className = "message";
@@ -391,7 +481,7 @@ function addMessage(message) {
   time.textContent = new Date(message.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const text = document.createElement("p");
   text.className = "message-text";
-  text.textContent = message.text;
+  fillRichText(text, message.text);
 
   if (message.reply_to) {
     content.append(createReplyQuote(message.reply_to));
@@ -420,7 +510,7 @@ function createReplyQuote(replyTo) {
   const quoteAuthor = document.createElement("cite");
   quoteAuthor.textContent = replyTo.username;
   const quoteText = document.createElement("span");
-  quoteText.textContent = replyTo.text;
+  fillRichText(quoteText, replyTo.text, { images: false });
   quote.append(quoteAuthor, quoteText);
   return quote;
 }
@@ -661,7 +751,7 @@ function addDmMessage(message) {
   time.textContent = new Date(message.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const text = document.createElement("p");
   text.className = "message-text";
-  text.textContent = message.text;
+  fillRichText(text, message.text);
   if (message.reply_to) content.append(createReplyQuote(message.reply_to));
   meta.append(author, time);
   if (message.reply_to !== undefined && message.username) {
@@ -1054,9 +1144,20 @@ function fitAppToViewport() {
   document.documentElement.style.setProperty("--app-offset", `${Math.round(offset)}px`);
 }
 
+function updateRoomTitle(view) {
+  const titles = {
+    chat: "World Chat",
+    dms: "Direct Messages",
+    settings: "Settings",
+    admin: "Admin",
+  };
+  document.querySelector("#roomTitle").textContent = titles[view] || "World Chat";
+}
+
 function setRoomView(view) {
   if (view === "admin" && currentUser?.role !== "admin") return;
   activeView = view;
+  updateRoomTitle(view);
   const showChat = view === "chat";
   const showDms = view === "dms";
   const showSettings = view === "settings";

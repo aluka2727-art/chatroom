@@ -24,8 +24,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='settings-171') }}">
-  <script src="{{ url_for('static', filename='app.js', v='settings-171') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='rich-text') }}">
+  <script src="{{ url_for('static', filename='app.js', v='rich-text') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -68,8 +68,7 @@
             <span class="unread-dot" aria-hidden="true"></span>
           </button>
           <div class="room-title-block">
-            <h1 id="roomTitle">PIGIN</h1>
-            <p class="room-subtitle">Chat Room</p>
+            <h1 id="roomTitle">World Chat</h1>
           </div>
           <div class="account-controls">
             <span class="animal-name" id="animalName"></span>
@@ -117,13 +116,12 @@
             </div>
           </section>
           <section class="dm-panel" id="dmPanel" aria-label="Direct messages" hidden>
-            <header class="admin-panel-heading">
-              <div><h2>Direct messages</h2><p>Private conversations with room members</p></div>
-              <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
-            </header>
             <p class="admin-error" id="dmError" role="alert" hidden></p>
             <div class="dm-layout">
-              <nav class="dm-contacts" id="dmContacts" aria-label="Conversations"></nav>
+              <div class="dm-sidebar">
+                <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
+                <nav class="dm-contacts" id="dmContacts" aria-label="Conversations"></nav>
+              </div>
               <section class="dm-conversation" aria-label="Selected conversation">
                 <header class="dm-conversation-heading">
                   <h3 id="dmConversationTitle">Choose someone to message</h3>
@@ -152,9 +150,6 @@
             </div>
           </section>
           <section class="admin-panel" id="settingsPanel" aria-label="Settings" hidden>
-            <header class="admin-panel-heading">
-              <div><h2>Settings</h2><p>Notifications and appearance</p></div>
-            </header>
             <div class="settings-list">
               <div class="settings-row">
                 <div class="settings-copy">
@@ -173,10 +168,9 @@
             </div>
           </section>
           <section class="admin-panel" id="adminPanel" aria-label="Admin controls" hidden>
-            <header class="admin-panel-heading">
-              <div><h2>Admin</h2><p>Manage accounts and messages</p></div>
+            <div class="panel-toolbar">
               <button class="admin-refresh" id="adminRefresh" type="button">Refresh</button>
-            </header>
+            </div>
             <p class="admin-error" id="adminError" role="alert" hidden></p>
             <section class="admin-section" aria-labelledby="accountsHeading">
               <h3 id="accountsHeading">Accounts</h3>
@@ -198,7 +192,7 @@
         <button class="login-submit" id="warningAction" type="button">Continue</button>
       </section>
     </div>
-    <footer class="app-footer">v1.7.1</footer>
+    <footer class="app-footer">v1.8.0</footer>
   </div>
 </body>
 </html>
