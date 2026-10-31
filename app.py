@@ -542,6 +542,10 @@ def create_app(test_config=None):
         csrf_token()
         return render_template("index.html")
 
+    @app.get("/share")
+    def share_target():
+        return index()
+
     @app.get("/sw.js")
     def service_worker():
         response = send_from_directory(app.static_folder, "sw.js", mimetype="application/javascript")

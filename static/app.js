@@ -354,6 +354,7 @@ function showRoom(user) {
   pendingDmPartnerId = readDmDeepLink();
   refreshPushToggle();
   if (pendingDmPartnerId) setRoomView("dms");
+  applyRememberedShare();
 }
 
 function showWarning(kind, message) {
@@ -602,6 +603,7 @@ async function loadMessages() {
 }
 
 async function initialize() {
+  captureIncomingShare();
   authSubmit.disabled = true;
   try {
     const data = await api("/api/session");
@@ -909,6 +911,53 @@ function readDmDeepLink() {
   if (params.get("view") !== "dms") return null;
   const partnerId = Number(params.get("with"));
   return Number.isInteger(partnerId) && partnerId > 0 ? partnerId : null;
+}
+
+function firstSharedUrl(value) {
+  const match = String(value || "").match(/https?:\/\/[^\s]+/i);
+  return match ? match[0].replace(/[),.;:!?]+$/, "") : "";
+}
+
+function incomingShareDraft() {
+  const params = new URLSearchParams(window.location.search);
+  const title = (params.get("title") || "").trim();
+  const text = (params.get("text") || "").trim();
+  const sharedUrl = (params.get("url") || "").trim();
+  const link = sharedUrl || firstSharedUrl(text);
+  const parts = [];
+  if (title && title !== link && !(text && text.includes(title))) parts.push(title);
+  if (text && text !== link) parts.push(text);
+  if (link && !parts.some(part => part.includes(link))) parts.push(link);
+  return parts.join("\n").trim().slice(0, 500);
+}
+
+function captureIncomingShare() {
+  if (window.location.pathname !== "/share") return;
+  const draft = incomingShareDraft();
+  if (draft) {
+    try {
+      sessionStorage.setItem("pigin-share", draft);
+    } catch {
+      // The shared link still applies if storage is blocked and the room is already open.
+    }
+  }
+  window.history.replaceState(null, "", "/");
+}
+
+function applyRememberedShare() {
+  let draft = "";
+  try {
+    draft = sessionStorage.getItem("pigin-share") || "";
+    if (draft) sessionStorage.removeItem("pigin-share");
+  } catch {
+    draft = "";
+  }
+  if (!draft && window.location.pathname === "/share") draft = incomingShareDraft();
+  if (!draft) return;
+  if (activeView !== "chat") setRoomView("chat");
+  messageInput.value = draft;
+  messageInput.dispatchEvent(new Event("input"));
+  if (warningScreen.hidden) messageInput.focus();
 }
 
 function clearDmDeepLink() {

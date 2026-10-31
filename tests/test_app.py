@@ -32,7 +32,7 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.7.1", page.data)
+        self.assertIn(b"v1.8.0", page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
         self.assertIn(b"/static/app.js", page.data)
@@ -54,11 +54,17 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"pigin-theme", script.data)
         self.assertIn(b"message-image", script.data)
         self.assertIn(b"noopener noreferrer", script.data)
+        self.assertIn(b"pigin-share", script.data)
         script.close()
         manifest = self.client.get("/manifest.webmanifest")
         self.assertEqual(manifest.status_code, 200)
         self.assertIn("application/manifest+json", manifest.content_type)
         self.assertIn(b'"display": "standalone"', manifest.data)
+        self.assertIn(b'"share_target"', manifest.data)
+        self.assertIn(b'"action": "/share"', manifest.data)
+        share = self.client.get("/share?url=https://youtu.be/dQw4w9WgXcQ")
+        self.assertEqual(share.status_code, 200)
+        self.assertIn(b"World Chat", share.data)
 
     def create_account(self, client=None):
         client = client or self.client

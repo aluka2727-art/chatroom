@@ -5,6 +5,19 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "categories": ["social"],
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
+  "share_target": {
+    "action": "/share",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
   "background_color": "#f6f7f3",
   "theme_color": "#f6f7f3",
   "icons": [
