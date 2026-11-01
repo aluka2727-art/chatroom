@@ -27,6 +27,9 @@ class Result:
     def __init__(self, rows):
         self._rows = rows
 
+    def __iter__(self):
+        return iter(self._rows)
+
     def fetchone(self):
         return self._rows[0] if self._rows else None
 

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from pywebpush import WebPushException
 
-from app import create_app
+from app import MODERATION_REJECT_MESSAGE, ModerationUnavailable, create_app
 
 
 class ChatroomTests(unittest.TestCase):
@@ -293,6 +293,111 @@ class ChatroomTests(unittest.TestCase):
         )
         self.assertEqual(invalid_reply_id.status_code, 400)
         self.assertEqual(self.client.get("/api/dms/9999").status_code, 404)
+
+    def test_messages_skip_moderation_without_api_key(self):
+        _user, token = self.create_account()
+        with patch("app.moderate_message", return_value=None) as moderate:
+            response = self.client.post(
+                "/api/messages",
+                json={"text": "Hello without a key"},
+                headers={"X-CSRF-Token": token},
+            )
+        self.assertEqual(response.status_code, 201)
+        moderate.assert_called_once()
+        self.assertEqual(moderate.call_args.args[1], "")
+
+    def test_messages_reject_profanity_without_api_key(self):
+        from app import moderate_message
+
+        self.assertEqual(moderate_message("what the fuck", ""), MODERATION_REJECT_MESSAGE)
+        self.assertIsNone(moderate_message("hello everyone", ""))
+        _user, token = self.create_account()
+        response = self.client.post(
+            "/api/messages",
+            json={"text": "this is shit"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json["error"], MODERATION_REJECT_MESSAGE)
+        self.assertEqual(self.client.get("/api/messages").json["messages"], [])
+
+    def test_messages_reject_slur_evasions_without_api_key(self):
+        from app import moderate_message
+
+        self.assertEqual(moderate_message("nga", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("ngas", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("that nga", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("n*gg*r", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("n i g g e r", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("n1gger", ""), MODERATION_REJECT_MESSAGE)
+        # Whole-word short codes should not fire inside unrelated words.
+        self.assertIsNone(moderate_message("manga", ""))
+        self.assertIsNone(moderate_message("hangar", ""))
+        _user, token = self.create_account()
+        response = self.client.post(
+            "/api/messages",
+            json={"text": "ngas"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json["error"], MODERATION_REJECT_MESSAGE)
+
+    def test_messages_reject_flagged_hate_speech(self):
+        self.app.config["OPENAI_API_KEY"] = "test-key"
+        _user, token = self.create_account()
+        with patch("app.moderate_message", return_value=MODERATION_REJECT_MESSAGE) as moderate:
+            response = self.client.post(
+                "/api/messages",
+                json={"text": "flagged content"},
+                headers={"X-CSRF-Token": token},
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json["error"], MODERATION_REJECT_MESSAGE)
+        moderate.assert_called_once_with("flagged content", "test-key")
+        self.assertEqual(self.client.get("/api/messages").json["messages"], [])
+
+    def test_messages_accept_clean_text_when_moderation_passes(self):
+        self.app.config["OPENAI_API_KEY"] = "test-key"
+        _user, token = self.create_account()
+        with patch("app.moderate_message", return_value=None):
+            response = self.client.post(
+                "/api/messages",
+                json={"text": "Hello clean world"},
+                headers={"X-CSRF-Token": token},
+            )
+        self.assertEqual(response.status_code, 201)
+        messages = self.client.get("/api/messages").json["messages"]
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["text"], "Hello clean world")
+
+    def test_messages_return_unavailable_when_moderation_fails(self):
+        self.app.config["OPENAI_API_KEY"] = "test-key"
+        _user, token = self.create_account()
+        with patch("app.moderate_message", side_effect=ModerationUnavailable):
+            response = self.client.post(
+                "/api/messages",
+                json={"text": "Anything"},
+                headers={"X-CSRF-Token": token},
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("unavailable", response.json["error"].lower())
+        self.assertEqual(self.client.get("/api/messages").json["messages"], [])
+
+    def test_direct_messages_reject_flagged_hate_speech(self):
+        self.app.config["OPENAI_API_KEY"] = "test-key"
+        _sender, token = self.create_account()
+        other_client = self.app.test_client()
+        other, _other_token = self.create_account(other_client)
+        with patch("app.moderate_message", return_value=MODERATION_REJECT_MESSAGE):
+            response = self.client.post(
+                f"/api/dms/{other['id']}",
+                json={"text": "flagged dm"},
+                headers={"X-CSRF-Token": token},
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json["error"], MODERATION_REJECT_MESSAGE)
+        conversation = other_client.get(f"/api/dms/{_sender['id']}").json["messages"]
+        self.assertEqual(conversation, [])
 
     def test_deleting_account_removes_its_direct_messages(self):
         admin_client, _admin_token = self.create_admin()

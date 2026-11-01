@@ -24,8 +24,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='rich-text') }}">
-  <script src="{{ url_for('static', filename='app.js', v='share-target') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='dm-pages') }}">
+  <script src="{{ url_for('static', filename='app.js', v='dm-composer-error') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -109,7 +109,19 @@
                 <p class="composer-error" id="messageError" role="alert" hidden></p>
                 <textarea id="messageInput" maxlength="500" rows="1" placeholder="Message the room..." aria-label="Write a message"></textarea>
                 <div class="composer-bottom">
-                  <button class="emoji-button" type="button" id="emojiButton" title="Add a smile" aria-label="Add a smile">☺</button>
+                  <div class="emoji-bar" role="group" aria-label="Emojis">
+                    <button class="emoji-button" type="button" data-emoji="😀" title="Grin" aria-label="Add grin">😀</button>
+                    <button class="emoji-button" type="button" data-emoji="😂" title="Laugh" aria-label="Add laugh">😂</button>
+                    <button class="emoji-button" type="button" data-emoji="😍" title="Heart eyes" aria-label="Add heart eyes">😍</button>
+                    <button class="emoji-button" type="button" data-emoji="😎" title="Cool" aria-label="Add cool">😎</button>
+                    <button class="emoji-button" type="button" data-emoji="😢" title="Sad" aria-label="Add sad">😢</button>
+                    <button class="emoji-button" type="button" data-emoji="😮" title="Surprised" aria-label="Add surprised">😮</button>
+                    <button class="emoji-button" type="button" data-emoji="👍" title="Thumbs up" aria-label="Add thumbs up">👍</button>
+                    <button class="emoji-button" type="button" data-emoji="👎" title="Thumbs down" aria-label="Add thumbs down">👎</button>
+                    <button class="emoji-button" type="button" data-emoji="❤️" title="Heart" aria-label="Add heart">❤️</button>
+                    <button class="emoji-button" type="button" data-emoji="🔥" title="Fire" aria-label="Add fire">🔥</button>
+                    <button class="emoji-button" type="button" data-emoji="🎉" title="Party" aria-label="Add party">🎉</button>
+                  </div>
                   <button class="send-button" id="sendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
                 </div>
               </form>
@@ -118,14 +130,23 @@
           <section class="dm-panel" id="dmPanel" aria-label="Direct messages" hidden>
             <p class="admin-error" id="dmError" role="alert" hidden></p>
             <div class="dm-layout">
-              <div class="dm-sidebar">
-                <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
+              <div class="dm-sidebar" id="dmSidebar">
+                <header class="dm-list-heading">
+                  <div class="dm-list-copy">
+                    <h3>Contacts</h3>
+                    <p>Choose someone to message</p>
+                  </div>
+                  <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
+                </header>
                 <nav class="dm-contacts" id="dmContacts" aria-label="Conversations"></nav>
               </div>
-              <section class="dm-conversation" aria-label="Selected conversation">
+              <section class="dm-conversation" id="dmConversation" aria-label="Selected conversation" hidden>
                 <header class="dm-conversation-heading">
-                  <h3 id="dmConversationTitle">Choose someone to message</h3>
-                  <p id="dmConversationSubtitle">Select a room member to start a private conversation.</p>
+                  <button class="dm-back" id="dmBackButton" type="button" aria-label="Back to contacts">←</button>
+                  <div class="dm-conversation-copy">
+                    <h3 id="dmConversationTitle">Choose someone to message</h3>
+                    <p id="dmConversationSubtitle">Select a room member to start a private conversation.</p>
+                  </div>
                 </header>
                 <section class="feed dm-feed" id="dmFeed" aria-label="Direct messages" aria-live="polite">
                   <div class="empty-state">Your private conversations will appear here.</div>
@@ -139,9 +160,22 @@
                       </div>
                       <button class="reply-cancel" id="cancelDmReply" type="button">Cancel</button>
                     </div>
+                    <p class="composer-error" id="dmMessageError" role="alert" hidden></p>
                     <textarea id="dmMessageInput" maxlength="500" rows="1" placeholder="Choose someone to message..." aria-label="Write a direct message" disabled></textarea>
                     <div class="composer-bottom">
-                      <span></span>
+                      <div class="emoji-bar" role="group" aria-label="Emojis">
+                        <button class="emoji-button" type="button" data-emoji="😀" title="Grin" aria-label="Add grin">😀</button>
+                        <button class="emoji-button" type="button" data-emoji="😂" title="Laugh" aria-label="Add laugh">😂</button>
+                        <button class="emoji-button" type="button" data-emoji="😍" title="Heart eyes" aria-label="Add heart eyes">😍</button>
+                        <button class="emoji-button" type="button" data-emoji="😎" title="Cool" aria-label="Add cool">😎</button>
+                        <button class="emoji-button" type="button" data-emoji="😢" title="Sad" aria-label="Add sad">😢</button>
+                        <button class="emoji-button" type="button" data-emoji="😮" title="Surprised" aria-label="Add surprised">😮</button>
+                        <button class="emoji-button" type="button" data-emoji="👍" title="Thumbs up" aria-label="Add thumbs up">👍</button>
+                        <button class="emoji-button" type="button" data-emoji="👎" title="Thumbs down" aria-label="Add thumbs down">👎</button>
+                        <button class="emoji-button" type="button" data-emoji="❤️" title="Heart" aria-label="Add heart">❤️</button>
+                        <button class="emoji-button" type="button" data-emoji="🔥" title="Fire" aria-label="Add fire">🔥</button>
+                        <button class="emoji-button" type="button" data-emoji="🎉" title="Party" aria-label="Add party">🎉</button>
+                      </div>
                       <button class="send-button" id="dmSendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
                     </div>
                   </form>

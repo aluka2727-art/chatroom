@@ -29,11 +29,15 @@ const adminPanel = document.querySelector("#adminPanel");
 const settingsPanel = document.querySelector("#settingsPanel");
 const adminError = document.querySelector("#adminError");
 const dmPanel = document.querySelector("#dmPanel");
+const dmSidebar = document.querySelector("#dmSidebar");
+const dmConversation = document.querySelector("#dmConversation");
+const dmBackButton = document.querySelector("#dmBackButton");
 const dmError = document.querySelector("#dmError");
 const dmContacts = document.querySelector("#dmContacts");
 const dmFeed = document.querySelector("#dmFeed");
 const dmMessageInput = document.querySelector("#dmMessageInput");
 const dmSendButton = document.querySelector("#dmSendButton");
+const dmMessageError = document.querySelector("#dmMessageError");
 const dmReplyPreview = document.querySelector("#dmReplyPreview");
 const dmReplyPreviewText = document.querySelector("#dmReplyPreviewText");
 const pushToggle = document.querySelector("#pushToggle");
@@ -259,15 +263,8 @@ function showLogin() {
   feed.replaceChildren();
   dmFeed.replaceChildren();
   dmContacts.replaceChildren();
-  selectedDmUser = null;
-  dmMessageCursor = 0;
   dmContactsSnapshot = "";
-  dmMessageInput.value = "";
-  clearDmReply();
-  dmMessageInput.disabled = true;
-  dmMessageInput.style.height = "34px";
-  dmMessageInput.placeholder = "Choose someone to message...";
-  dmSendButton.disabled = true;
+  resetDmConversationPane();
   pendingDmPartnerId = null;
   pushEndpoint = "";
   resetPushToggle();
@@ -313,15 +310,8 @@ function showRoom(user) {
   feed.replaceChildren();
   dmFeed.replaceChildren();
   dmContacts.replaceChildren();
-  selectedDmUser = null;
-  dmMessageCursor = 0;
   dmContactsSnapshot = "";
-  dmMessageInput.value = "";
-  clearDmReply();
-  dmMessageInput.disabled = true;
-  dmMessageInput.style.height = "34px";
-  dmMessageInput.placeholder = "Choose someone to message...";
-  dmSendButton.disabled = true;
+  resetDmConversationPane();
   activeView = "chat";
   const isAdmin = user.role === "admin";
   adminTab.hidden = !isAdmin;
@@ -684,21 +674,10 @@ async function loadDmContacts() {
     }
     if (selectedDmUser) {
       selectedDmUser = contacts.find(contact => contact.id === selectedDmUser.id) || null;
-      if (!selectedDmUser) {
-        dmMessageCursor = 0;
-        dmFeed.replaceChildren();
-        const empty = document.createElement("div");
-        empty.className = "empty-state";
-        empty.textContent = "Your private conversations will appear here.";
-        dmFeed.append(empty);
-        document.querySelector("#dmConversationTitle").textContent = "Choose someone to message";
-        document.querySelector("#dmConversationSubtitle").textContent = "Select a room member to start a private conversation.";
-        dmMessageInput.value = "";
-        dmMessageInput.disabled = true;
-        dmMessageInput.style.height = "34px";
-        dmMessageInput.placeholder = "Choose someone to message...";
-        dmSendButton.disabled = true;
-      }
+      if (!selectedDmUser) resetDmConversationPane();
+      else showDmConversationPage();
+    } else {
+      showDmContactsPage();
     }
     renderDmContacts(contacts);
   } catch (error) {
@@ -712,6 +691,39 @@ async function loadDmContacts() {
   }
 }
 
+function showDmContactsPage() {
+  dmSidebar.hidden = false;
+  dmConversation.hidden = true;
+  dmPanel.classList.remove("show-conversation");
+}
+
+function showDmConversationPage() {
+  dmSidebar.hidden = true;
+  dmConversation.hidden = false;
+  dmPanel.classList.add("show-conversation");
+}
+
+function resetDmConversationPane() {
+  selectedDmUser = null;
+  dmMessageCursor = 0;
+  clearDmReply();
+  dmFeed.replaceChildren();
+  const empty = document.createElement("div");
+  empty.className = "empty-state";
+  empty.textContent = "Your private conversations will appear here.";
+  dmFeed.append(empty);
+  document.querySelector("#dmConversationTitle").textContent = "Choose someone to message";
+  document.querySelector("#dmConversationSubtitle").textContent = "Select a room member to start a private conversation.";
+  dmMessageInput.value = "";
+  dmMessageInput.disabled = true;
+  dmMessageInput.style.height = "34px";
+  dmMessageInput.placeholder = "Choose someone to message...";
+  dmSendButton.disabled = true;
+  dmMessageError.hidden = true;
+  syncDmEmojiButtons();
+  showDmContactsPage();
+}
+
 function selectDmContact(contact) {
   selectedDmUser = contact;
   dmMessageCursor = 0;
@@ -722,10 +734,13 @@ function selectDmContact(contact) {
   dmMessageInput.disabled = false;
   dmMessageInput.placeholder = `Message ${contact.username}...`;
   dmSendButton.disabled = true;
+  syncDmEmojiButtons();
   document.querySelector("#dmConversationTitle").textContent = contact.username;
   document.querySelector("#dmConversationSubtitle").textContent = "Private conversation";
   renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
+  showDmConversationPage();
   showDmError("");
+  dmMessageError.hidden = true;
   loadDmMessages();
   syncReadState(unreadState, true);
 }
@@ -1224,6 +1239,8 @@ function setRoomView(view) {
   adminTab.classList.toggle("active", showAdmin);
   adminTab.setAttribute("aria-pressed", String(showAdmin));
   if (showDms) {
+    if (selectedDmUser) showDmConversationPage();
+    else showDmContactsPage();
     loadDmContacts();
     loadDmMessages();
   }
@@ -1238,6 +1255,12 @@ chatTab.addEventListener("click", () => setRoomView("chat"));
 dmTab.addEventListener("click", () => setRoomView("dms"));
 settingsTab.addEventListener("click", () => setRoomView("settings"));
 adminTab.addEventListener("click", () => setRoomView("admin"));
+dmBackButton.addEventListener("click", () => {
+  resetDmConversationPane();
+  renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
+  showDmError("");
+  syncReadState(unreadState, true);
+});
 menuButton.addEventListener("click", () => {
   setMenuOpen(!document.body.classList.contains("menu-open"));
 });
@@ -1433,12 +1456,14 @@ dmMessageInput.addEventListener("input", () => {
   dmSendButton.disabled = !selectedDmUser || !dmMessageInput.value.trim();
   dmMessageInput.style.height = "auto";
   dmMessageInput.style.height = `${Math.min(dmMessageInput.scrollHeight, 110)}px`;
+  dmMessageError.hidden = true;
 });
 document.querySelector("#dmMessageForm").addEventListener("submit", async event => {
   event.preventDefault();
   const text = dmMessageInput.value.trim();
   if (!text || !selectedDmUser || dmSendButton.disabled) return;
   dmSendButton.disabled = true;
+  dmMessageError.hidden = true;
   try {
     const payload = { text };
     if (replyingToDm) payload.reply_to_id = replyingToDm.id;
@@ -1449,6 +1474,7 @@ document.querySelector("#dmMessageForm").addEventListener("submit", async event 
     dmMessageInput.value = "";
     dmMessageInput.style.height = "34px";
     clearDmReply();
+    dmMessageError.hidden = true;
     dmContactsSnapshot = "";
     await Promise.all([loadDmMessages(), loadDmContacts()]);
   } catch (error) {
@@ -1457,7 +1483,8 @@ document.querySelector("#dmMessageForm").addEventListener("submit", async event 
     } else if (error.status === 401) {
       showLogin();
     } else {
-      showDmError(error.message);
+      dmMessageError.textContent = error.message;
+      dmMessageError.hidden = false;
     }
   } finally {
     dmSendButton.disabled = !selectedDmUser || !dmMessageInput.value.trim();
@@ -1475,10 +1502,36 @@ messageInput.addEventListener("keydown", event => {
     if (!sendButton.disabled) document.querySelector("#messageForm").requestSubmit();
   }
 });
-document.querySelector("#emojiButton").addEventListener("click", () => {
-  messageInput.value += " ☺";
-  messageInput.dispatchEvent(new Event("input"));
-  messageInput.focus();
+function syncDmEmojiButtons() {
+  document.querySelectorAll("#dmMessageForm .emoji-button").forEach(button => {
+    button.disabled = dmMessageInput.disabled;
+  });
+}
+
+function insertEmoji(input, emoji) {
+  if (!input || input.disabled) return;
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  const before = input.value.slice(0, start);
+  const after = input.value.slice(end);
+  const needsSpace = before.length > 0 && !/\s$/.test(before);
+  const inserted = `${needsSpace ? " " : ""}${emoji}`;
+  input.value = `${before}${inserted}${after}`;
+  const cursor = before.length + inserted.length;
+  input.setSelectionRange(cursor, cursor);
+  input.dispatchEvent(new Event("input"));
+  input.focus();
+}
+
+document.querySelectorAll(".emoji-bar").forEach(bar => {
+  bar.addEventListener("click", event => {
+    const button = event.target.closest(".emoji-button");
+    if (!button || button.disabled) return;
+    const form = bar.closest("form");
+    const input = form?.querySelector("textarea");
+    insertEmoji(input, button.dataset.emoji || button.textContent.trim());
+  });
 });
 
+syncDmEmojiButtons();
 initialize();

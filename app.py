@@ -1,12 +1,17 @@
 import base64
 import json
 import os
+import re
 import secrets
 import sqlite3
+import ssl
 import time
+import urllib.error
+import urllib.request
 from functools import wraps
 from pathlib import Path
 
+import certifi
 import click
 from flask import Flask, abort, g, jsonify, render_template, request, send_from_directory, session
 from pywebpush import WebPushException, webpush
@@ -42,6 +47,55 @@ RESERVED_USERNAMES = {"Cricket", "Viper"}
 MAX_ACCOUNTS = 100
 MAX_MESSAGE_LENGTH = 500
 PRESENCE_LEASE_SECONDS = 12
+OPENAI_MODERATION_URL = "https://api.openai.com/v1/moderations"
+MODERATION_REJECT_MESSAGE = "Message not allowed."
+# Block identity hate plus common abuse categories from OpenAI Moderations.
+BLOCKED_MODERATION_CATEGORIES = (
+    "hate",
+    "hate/threatening",
+    "harassment",
+    "harassment/threatening",
+    "violence",
+    "violence/graphic",
+)
+# OpenAI Moderations does not reliably flag plain swearing, so block these locally.
+PROFANITY_WORDS = frozenset({
+    "asshole", "assholes", "bastard", "bastards", "bitch", "bitches", "bollocks",
+    "bullshit", "cock", "cocks", "cunt", "cunts", "damn", "damned", "dick", "dicks",
+    "fuck", "fucked", "fucker", "fuckers", "fucking", "motherfucker", "motherfuckers",
+    "piss", "pissed", "shit", "shitty", "slut", "sluts", "whore", "whores",
+})
+# Short coded forms and full terms matched as whole words only (avoids "manga" etc.).
+SLUR_WORDS = frozenset({
+    "nga", "ngas", "ngaz", "nig", "niga", "nigga", "niggah", "niggas", "niggaz",
+    "nigger", "niggers", "nigg", "ngga", "nggas", "retard", "retarded", "retards",
+})
+# Longer stems checked after stripping separators / leetspeak ("n*gg*r", "n i g g e r").
+SLUR_COMPACT_STEMS = frozenset({
+    "nigger", "niggers", "nigga", "niggah", "niggas", "niggaz", "niga",
+    "ngga", "nggas", "ngas", "ngaz", "nggr", "nigg",
+})
+LEET_TRANSLATION = str.maketrans({
+    "0": "o",
+    "1": "i",
+    "3": "e",
+    "4": "a",
+    "5": "s",
+    "7": "t",
+    "@": "a",
+    "$": "s",
+})
+LOCAL_BLOCK_WORDS = PROFANITY_WORDS | SLUR_WORDS
+LOCAL_BLOCK_RE = re.compile(
+    r"\b(?:"
+    + "|".join(re.escape(word) for word in sorted(LOCAL_BLOCK_WORDS, key=len, reverse=True))
+    + r")\b",
+    re.IGNORECASE,
+)
+
+
+class ModerationUnavailable(Exception):
+    """Raised when a configured moderation API call fails."""
 
 
 def vapid_application_server_key(vapid):
@@ -54,6 +108,66 @@ def vapid_application_server_key(vapid):
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
+def compact_moderation_text(text):
+    lowered = text.lower().translate(LEET_TRANSLATION)
+    return re.sub(r"[^a-z]", "", lowered)
+
+
+def contains_blocked_language(text):
+    if LOCAL_BLOCK_RE.search(text):
+        return True
+    compact = compact_moderation_text(text)
+    return any(stem in compact for stem in SLUR_COMPACT_STEMS)
+
+
+def contains_profanity(text):
+    return contains_blocked_language(text)
+
+
+def moderate_message(text, api_key):
+    """Return None if allowed, an error string if content is blocked.
+
+    Always checks a local profanity/slur list (including common evasions). When
+    api_key is set, also calls OpenAI Moderations. When a key is set and that
+    request fails, raises ModerationUnavailable.
+    """
+    if contains_blocked_language(text):
+        return MODERATION_REJECT_MESSAGE
+    if not api_key:
+        return None
+    payload = json.dumps({
+        "model": "omni-moderation-latest",
+        "input": text,
+    }).encode("utf-8")
+    request_obj = urllib.request.Request(
+        OPENAI_MODERATION_URL,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    try:
+        with urllib.request.urlopen(request_obj, timeout=5, context=ssl_context) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+        raise ModerationUnavailable from exc
+    results = body.get("results") if isinstance(body, dict) else None
+    if not isinstance(results, list) or not results:
+        raise ModerationUnavailable
+    result = results[0]
+    if not isinstance(result, dict):
+        raise ModerationUnavailable
+    categories = result.get("categories")
+    if not isinstance(categories, dict):
+        raise ModerationUnavailable
+    if result.get("flagged") or any(categories.get(name) for name in BLOCKED_MODERATION_CATEGORIES):
+        return MODERATION_REJECT_MESSAGE
+    return None
+
+
 def create_app(test_config=None):
     project_dir = Path(__file__).resolve().parent
     app = Flask(__name__, template_folder=str(project_dir))
@@ -62,6 +176,7 @@ def create_app(test_config=None):
         DATABASE=os.environ.get("CHATROOM_DATABASE", str(project_dir / "chatroom.sqlite3")),
         SUPABASE_DB_URL=os.environ.get("SUPABASE_DB_URL", ""),
         USE_SUPABASE=False,
+        OPENAI_API_KEY=os.environ.get("OPENAI_API_KEY", ""),
         VAPID_PUBLIC_KEY=os.environ.get("CHATROOM_VAPID_PUBLIC_KEY", ""),
         VAPID_PRIVATE_KEY_FILE=os.environ.get("CHATROOM_VAPID_PRIVATE_KEY_FILE", ""),
         VAPID_SUBJECT=os.environ.get("CHATROOM_VAPID_SUBJECT", "mailto:admin@example.com"),
@@ -784,6 +899,12 @@ def create_app(test_config=None):
         text = text.strip()
         if not text or len(text) > MAX_MESSAGE_LENGTH:
             return jsonify(error="Messages must be between 1 and 500 characters."), 400
+        try:
+            moderation_error = moderate_message(text, app.config.get("OPENAI_API_KEY", ""))
+        except ModerationUnavailable:
+            return jsonify(error="Moderation is temporarily unavailable. Try again."), 503
+        if moderation_error:
+            return jsonify(error=moderation_error), 400
         database = get_db()
         reply_to_id = data.get("reply_to_id")
         if reply_to_id is not None:
@@ -960,6 +1081,12 @@ def create_app(test_config=None):
         text = text.strip()
         if not text or len(text) > MAX_MESSAGE_LENGTH:
             return jsonify(error="Messages must be between 1 and 500 characters."), 400
+        try:
+            moderation_error = moderate_message(text, app.config.get("OPENAI_API_KEY", ""))
+        except ModerationUnavailable:
+            return jsonify(error="Moderation is temporarily unavailable. Try again."), 503
+        if moderation_error:
+            return jsonify(error=moderation_error), 400
 
         database = get_db()
         if database.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
