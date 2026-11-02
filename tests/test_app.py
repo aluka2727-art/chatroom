@@ -19,6 +19,7 @@ class ChatroomTests(unittest.TestCase):
             "TESTING": True,
             "SECRET_KEY": "test-secret-key",
             "DATABASE": str(self.database_path),
+            "OPENAI_API_KEY": "",
             "VAPID_PUBLIC_KEY": "",
             "VAPID_PRIVATE_KEY_FILE": "",
             "SESSION_COOKIE_SECURE": False,
@@ -32,14 +33,20 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.8.0", page.data)
+        self.assertIn(b"v1.11.0", page.data)
+        self.assertIn(b"id=\"versionNotesScreen\"", page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
         self.assertIn(b"/static/app.js", page.data)
         self.assertIn(b"id=\"replyPreview\"", page.data)
         self.assertIn(b"id=\"settingsPanel\"", page.data)
+        self.assertIn(b"id=\"displayNameInput\"", page.data)
+        self.assertIn(b"id=\"avatarInput\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
         self.assertIn(b"id=\"themeToggle\"", page.data)
+        self.assertIn(b"APP_VERSION = \"1.11.0\"", script.data)
+        self.assertIn(b"VERSION_NOTES", script.data)
+        self.assertIn(b"pigin-seen-version", script.data)
         self.assertIn(b"/manifest.webmanifest", page.data)
         self.assertIn(b"favicon.ico", page.data)
         self.assertIn(b"apple-touch-icon.png", page.data)
@@ -209,6 +216,9 @@ class ChatroomTests(unittest.TestCase):
             "SESSION_COOKIE_SECURE": False,
         })
         with sqlite3.connect(legacy_database) as database:
+            account_columns = {row[1] for row in database.execute("PRAGMA table_info(accounts)")}
+            self.assertIn("display_name", account_columns)
+            self.assertIn("avatar_ext", account_columns)
             columns = {row[1] for row in database.execute("PRAGMA table_info(messages)")}
             direct_message_columns = {
                 row[1] for row in database.execute("PRAGMA table_info(direct_messages)")
@@ -319,6 +329,8 @@ class ChatroomTests(unittest.TestCase):
         from app import moderate_message
 
         self.assertEqual(moderate_message("what the fuck", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("fucktard", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("f*cktard", ""), MODERATION_REJECT_MESSAGE)
         self.assertIsNone(moderate_message("hello everyone", ""))
         _user, token = self.create_account()
         response = self.client.post(
@@ -444,6 +456,75 @@ class ChatroomTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.json)
         self.assertEqual(response.json["user"]["username"], user["username"])
+
+    def test_display_name_and_avatar_are_linked_to_account(self):
+        from io import BytesIO
+
+        user, token = self.create_account()
+        updated = self.client.patch(
+            "/api/profile",
+            json={"display_name": "Lucas Chat"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(updated.status_code, 200, updated.json)
+        self.assertEqual(updated.json["user"]["display_name"], "Lucas Chat")
+        self.assertEqual(updated.json["user"]["public_name"], "Lucas Chat")
+        self.assertEqual(updated.json["user"]["username"], user["username"])
+
+        token = self.client.get("/api/session").json["csrf_token"]
+        tiny_png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+            b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        uploaded = self.client.post(
+            "/api/profile/avatar",
+            data={"avatar": (BytesIO(tiny_png), "face.png")},
+            content_type="multipart/form-data",
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.json)
+        self.assertTrue(uploaded.json["user"]["avatar_url"].endswith(f"/api/avatars/{user['id']}"))
+
+        posted = self.client.post(
+            "/api/messages",
+            json={"text": "Hello with a profile"},
+            headers={"X-CSRF-Token": self.client.get("/api/session").json["csrf_token"]},
+        )
+        self.assertEqual(posted.status_code, 201)
+        message = self.client.get("/api/messages").json["messages"][0]
+        self.assertEqual(message["username"], "Lucas Chat")
+        self.assertEqual(message["animal_username"], user["username"])
+        self.assertTrue(message["avatar_url"].endswith(f"/api/avatars/{user['id']}"))
+
+        other = self.app.test_client()
+        csrf = other.get("/api/session").json["csrf_token"]
+        signed_in = other.post(
+            "/api/auth",
+            json={
+                "mode": "signin",
+                "username": "lucas chat",
+                "password": "correct-horse-battery",
+            },
+            headers={"X-CSRF-Token": csrf},
+        )
+        self.assertEqual(signed_in.status_code, 200, signed_in.json)
+        self.assertEqual(signed_in.json["user"]["id"], user["id"])
+        self.assertEqual(signed_in.json["user"]["public_name"], "Lucas Chat")
+
+        animal_client = self.app.test_client()
+        animal_csrf = animal_client.get("/api/session").json["csrf_token"]
+        animal_signin = animal_client.post(
+            "/api/auth",
+            json={
+                "mode": "signin",
+                "username": user["username"],
+                "password": "correct-horse-battery",
+            },
+            headers={"X-CSRF-Token": animal_csrf},
+        )
+        self.assertEqual(animal_signin.status_code, 200)
+        self.assertEqual(animal_signin.json["user"]["id"], user["id"])
 
     def test_deleted_author_stays_deleted_after_username_reuse(self):
         old_user, old_token = self.create_account()

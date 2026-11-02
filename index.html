@@ -42,8 +42,8 @@
         <form id="accountForm" data-mode="create">
           <div class="auth-fields">
             <div class="field-group" id="usernameGroup" hidden>
-              <label class="field-label" for="usernameInput">Animal username</label>
-              <input class="auth-input" id="usernameInput" type="text" autocomplete="username" autocapitalize="words" pattern="[A-Za-z]+" maxlength="20" placeholder="Otter">
+              <label class="field-label" for="usernameInput">Username</label>
+              <input class="auth-input" id="usernameInput" type="text" autocomplete="username" autocapitalize="words" maxlength="24" placeholder="Otter or display name">
             </div>
             <div class="field-group">
               <label class="field-label" for="passwordInput">Password</label>
@@ -182,6 +182,27 @@
           </section>
           <section class="admin-panel" id="settingsPanel" aria-label="Settings" hidden>
             <div class="settings-list">
+              <div class="settings-profile">
+                <div class="settings-avatar-wrap">
+                  <div class="settings-avatar" id="settingsAvatar" aria-hidden="true">?</div>
+                  <div class="settings-avatar-actions">
+                    <label class="settings-upload">
+                      Change photo
+                      <input id="avatarInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+                    </label>
+                    <button class="settings-link" id="removeAvatarButton" type="button" hidden>Remove photo</button>
+                  </div>
+                </div>
+                <form class="settings-profile-form" id="displayNameForm">
+                  <label class="field-label" for="displayNameInput">Display name</label>
+                  <p class="settings-hint">Shown in chat and DMs. You can still sign in with your animal name (<span id="settingsAnimalName">—</span>).</p>
+                  <div class="settings-name-row">
+                    <input class="auth-input" id="displayNameInput" type="text" maxlength="24" placeholder="Optional display name" autocomplete="nickname">
+                    <button class="settings-toggle" id="saveDisplayName" type="submit">Save</button>
+                  </div>
+                  <p class="composer-error" id="profileError" role="alert" hidden></p>
+                </form>
+              </div>
               <div class="settings-row">
                 <div class="settings-copy">
                   <h3>Notifications</h3>
@@ -223,7 +244,15 @@
         <button class="login-submit" id="warningAction" type="button">Continue</button>
       </section>
     </div>
-    <footer class="app-footer">v1.10.0</footer>
+    <div class="warning-screen" id="versionNotesScreen" role="dialog" aria-modal="true" aria-labelledby="versionNotesTitle" hidden>
+      <section class="warning-panel version-notes-panel">
+        <p class="version-notes-eyebrow" id="versionNotesEyebrow">What's new</p>
+        <h2 id="versionNotesTitle">Version notes</h2>
+        <ul class="version-notes-list" id="versionNotesList"></ul>
+        <button class="login-submit" id="versionNotesAction" type="button">Got it</button>
+      </section>
+    </div>
+    <footer class="app-footer">v1.11.0</footer>
   </div>
 </body>
 </html>

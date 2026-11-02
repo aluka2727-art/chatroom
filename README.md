@@ -8,6 +8,8 @@ The app has a 100-account limit. `Cricket` is reserved for the initial admin acc
 
 The **DMS** side tab lets signed-in users start private conversations with other active accounts. Direct messages are visible only to their sender and recipient and are removed if either account is deleted. Select **Reply** on a DM to quote it in that conversation.
 
+In **SETTINGS**, set an optional display name and profile photo. Chat and DMs show that display name when set; otherwise they show your animal username. Sign in with either your animal username or your display name (plus password). Photos must be JPEG, PNG, or WebP and 256 KB or smaller.
+
 In the room chat, select **Reply** on a message to quote it in your next message. If the original message is deleted, its quote is shown as `[DELETED]`.
 
 When signed in as an admin, the **ADMIN** side tab can delete member accounts or individual messages. Deleted accounts' room messages and individually deleted room messages remain as `[DELETED]`; usernames freed by account deletion can be reused. Affected active users receive a blocking warning screen.
@@ -30,7 +32,7 @@ flask --app app create-admin
 
 The command prompts for Cricket's password without echoing it. Use at least 8 characters. Put the Supabase connection string in a `.env` file in this folder as `SUPABASE_DB_URL=...` and leave that file out of git. If that variable is missing, local data is stored in `chatroom.sqlite3` unless `CHATROOM_DATABASE` is set.
 
-Room chat and DMs always check a local blocklist (profanity, slurs, and common evasions like spaced/starred spellings) before a message is stored. To also block hate, harassment, and violence, add `OPENAI_API_KEY=...` to the same `.env` file (from [platform.openai.com](https://platform.openai.com/api-keys)). The free OpenAI Moderations API runs after the local check. If the key is omitted, only the local filter runs.
+Room chat and DMs always check a free local blocklist (profanity, slurs, compounds like `fucktard`, and common evasions). To also block hate, harassment, sexual content, and violence with OpenAI's **free** Moderations API, add `OPENAI_API_KEY=...` to the same `.env` file (from [platform.openai.com](https://platform.openai.com/api-keys)). If the key is omitted, only the local filter runs. There is no paid Chat usage.
 
 Direct-message alerts use browser push. The first time a signed-in member opens the DMS tab, the app writes `vapid_private.pem` and `vapid_public.txt` next to the database. Leave those files on the server and out of git. Members turn alerts on with **Enable notifications** in the DMS tab. On an iPhone, add the site to the Home Screen from Safari and open PIGIN from that icon before enabling alerts. To supply keys yourself, set `CHATROOM_VAPID_PUBLIC_KEY` to the URL-safe base64 application server key, `CHATROOM_VAPID_PRIVATE_KEY_FILE` to the private PEM path, and `CHATROOM_VAPID_SUBJECT` to a `mailto:` address for this site.
 

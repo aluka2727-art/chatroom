@@ -9,3 +9,5 @@ venv/
 vapid_private.pem
 vapid_public.txt
 .vapid.lock
+data/avatars/
+**/avatars/

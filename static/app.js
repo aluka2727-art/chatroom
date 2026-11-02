@@ -14,6 +14,18 @@ const messageError = document.querySelector("#messageError");
 const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
+const versionNotesScreen = document.querySelector("#versionNotesScreen");
+const APP_VERSION = "1.11.0";
+const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
+const VERSION_NOTES = {
+  "1.11.0": [
+    "Set a custom display name in Settings — it shows in chat and DMs.",
+    "Upload a profile photo (JPEG, PNG, or WebP, up to 256 KB).",
+    "Sign in with either your animal username or your display name.",
+    "Searchable emoji picker in chat and DMs.",
+    "Stronger free message filtering for swearing, insults, and common evasions.",
+  ],
+};
 const warningText = document.querySelector("#warningText");
 const warningAction = document.querySelector("#warningAction");
 const adminTab = document.querySelector("#adminTab");
@@ -245,7 +257,7 @@ function setAuthMode(mode) {
   confirmInput.required = !signingIn;
   passwordInput.autocomplete = signingIn ? "current-password" : "new-password";
   document.querySelector("#loginCopy").textContent = signingIn
-    ? "Sign in with your animal username and password."
+    ? "Sign in with your animal username or display name, and password."
     : "Create an account with a password. We’ll give you an animal name.";
   document.querySelector("#authSubmit").textContent = signingIn ? "Sign in" : "Create account";
   authError.hidden = true;
@@ -260,6 +272,7 @@ function showLogin() {
   clearReply();
   messageError.hidden = true;
   warningScreen.hidden = true;
+  versionNotesScreen.hidden = true;
   feed.replaceChildren();
   dmFeed.replaceChildren();
   dmContacts.replaceChildren();
@@ -289,7 +302,7 @@ function showLogin() {
 }
 
 function showAccountCreated(username) {
-  accountCreatedNotice.textContent = `Account Created, Your animal username is ${username}.`;
+  accountCreatedNotice.textContent = `Account created. Your animal username is ${username}. Set a display name anytime in Settings.`;
   accountCreatedNotice.hidden = false;
   clearTimeout(accountCreatedTimeout);
   accountCreatedTimeout = setTimeout(() => {
@@ -297,11 +310,54 @@ function showAccountCreated(username) {
   }, 7000);
 }
 
-function showRoom(user) {
+function publicNameFor(person) {
+  return person.public_name || person.display_name || person.username || "";
+}
+
+function fillAvatarElement(element, person, { own = false, deleted = false } = {}) {
+  const name = publicNameFor(person);
+  element.classList.toggle("own", own && !deleted);
+  element.classList.toggle("deleted", deleted);
+  element.classList.toggle("has-image", Boolean(person.avatar_url) && !deleted);
+  element.replaceChildren();
+  if (person.avatar_url && !deleted) {
+    const image = document.createElement("img");
+    image.src = person.avatar_url;
+    image.alt = "";
+    element.append(image);
+  } else {
+    element.textContent = deleted || !name ? "?" : name[0].toUpperCase();
+  }
+}
+
+function showProfileError(message) {
+  const profileError = document.querySelector("#profileError");
+  profileError.textContent = message || "";
+  profileError.hidden = !message;
+}
+
+function refreshProfileSettings() {
+  if (!currentUser) return;
+  const settingsAvatar = document.querySelector("#settingsAvatar");
+  const displayNameInput = document.querySelector("#displayNameInput");
+  const removeAvatarButton = document.querySelector("#removeAvatarButton");
+  document.querySelector("#settingsAnimalName").textContent = currentUser.username;
+  displayNameInput.value = currentUser.display_name || "";
+  fillAvatarElement(settingsAvatar, currentUser);
+  removeAvatarButton.hidden = !currentUser.avatar_url;
+  showProfileError("");
+}
+
+function applyCurrentUser(user) {
   currentUser = user;
+  document.querySelector("#animalName").textContent = publicNameFor(user);
+  refreshProfileSettings();
+}
+
+function showRoom(user) {
+  applyCurrentUser(user);
   loginScreen.hidden = true;
   room.hidden = false;
-  document.querySelector("#animalName").textContent = user.username;
   passwordInput.value = "";
   confirmInput.value = "";
   messageCursor = 0;
@@ -339,6 +395,8 @@ function showRoom(user) {
   }, 2500);
   if (user.warning_count) {
     showWarning("message", `${user.warning_count === 1 ? "An admin deleted one of your messages" : `An admin deleted ${user.warning_count} of your messages`}. Deleted messages remain in the chat as [DELETED].`);
+  } else {
+    maybeShowVersionNotes();
   }
   if (isAdmin) loadAdminData();
   pendingDmPartnerId = readDmDeepLink();
@@ -351,11 +409,51 @@ function showWarning(kind, message) {
   if (warningKind === "account") return;
   if (warningKind === "message" && kind !== "account") return;
   warningKind = kind;
+  versionNotesScreen.hidden = true;
   document.querySelector("#warningTitle").textContent = kind === "account" ? "Account deleted" : "Message deleted";
   warningText.textContent = message;
   warningAction.textContent = kind === "account" ? "Return to sign in" : "I understand";
   warningScreen.hidden = false;
   warningAction.focus();
+}
+
+function hasSeenCurrentVersionNotes() {
+  try {
+    return localStorage.getItem(VERSION_NOTES_STORAGE_KEY) === APP_VERSION;
+  } catch (error) {
+    return true;
+  }
+}
+
+function markCurrentVersionNotesSeen() {
+  try {
+    localStorage.setItem(VERSION_NOTES_STORAGE_KEY, APP_VERSION);
+  } catch (error) {}
+}
+
+function maybeShowVersionNotes() {
+  if (!currentUser || !warningScreen.hidden || warningKind) return;
+  if (hasSeenCurrentVersionNotes()) return;
+  const notes = VERSION_NOTES[APP_VERSION] || [];
+  if (!notes.length) {
+    markCurrentVersionNotesSeen();
+    return;
+  }
+  document.querySelector("#versionNotesTitle").textContent = `What's new in v${APP_VERSION}`;
+  const list = document.querySelector("#versionNotesList");
+  list.replaceChildren();
+  for (const note of notes) {
+    const item = document.createElement("li");
+    item.textContent = note;
+    list.append(item);
+  }
+  versionNotesScreen.hidden = false;
+  document.querySelector("#versionNotesAction").focus();
+}
+
+function dismissVersionNotes() {
+  markCurrentVersionNotesSeen();
+  versionNotesScreen.hidden = true;
 }
 
 function linkHref(value) {
@@ -451,12 +549,11 @@ function addMessage(message) {
   const article = document.createElement("article");
   article.className = "message";
   article.dataset.messageId = message.id;
+  const deleted = message.username === "[DELETED]";
   const avatar = document.createElement("div");
   avatar.className = "message-avatar";
-  avatar.classList.toggle("own", message.is_own && message.username !== "[DELETED]");
-  avatar.classList.toggle("deleted", message.username === "[DELETED]");
-  avatar.textContent = message.username === "[DELETED]" ? "?" : message.username[0];
   avatar.setAttribute("aria-hidden", "true");
+  fillAvatarElement(avatar, message, { own: message.is_own, deleted });
 
   const content = document.createElement("div");
   content.className = "message-content";
@@ -464,7 +561,7 @@ function addMessage(message) {
   meta.className = "message-meta";
   const author = document.createElement("span");
   author.className = "message-author";
-  author.classList.toggle("deleted", message.username === "[DELETED]");
+  author.classList.toggle("deleted", deleted);
   author.textContent = message.username;
   const time = document.createElement("time");
   time.className = "message-time";
@@ -638,16 +735,23 @@ function renderDmContacts(contacts) {
     button.classList.toggle("active", selectedDmUser?.id === contact.id);
     button.dataset.accountId = String(contact.id);
     button.setAttribute("aria-pressed", String(selectedDmUser?.id === contact.id));
+    const avatar = document.createElement("div");
+    avatar.className = "dm-contact-avatar message-avatar";
+    avatar.setAttribute("aria-hidden", "true");
+    fillAvatarElement(avatar, contact);
+    const copy = document.createElement("span");
+    copy.className = "dm-contact-copy";
     const name = document.createElement("span");
     name.className = "dm-contact-name";
     name.textContent = contact.username;
     const preview = document.createElement("span");
     preview.className = "dm-contact-preview";
     preview.textContent = contact.last_message || "Start a conversation";
+    copy.append(name, preview);
     const dot = document.createElement("span");
     dot.className = "unread-dot";
     dot.setAttribute("aria-hidden", "true");
-    button.append(name, preview, dot);
+    button.append(avatar, copy, dot);
     button.addEventListener("click", () => selectDmContact(contact));
     dmContacts.append(button);
   }
@@ -751,9 +855,8 @@ function addDmMessage(message) {
   article.dataset.messageId = message.id;
   const avatar = document.createElement("div");
   avatar.className = "message-avatar";
-  avatar.classList.toggle("own", message.is_own);
-  avatar.textContent = message.username[0];
   avatar.setAttribute("aria-hidden", "true");
+  fillAvatarElement(avatar, message, { own: message.is_own });
 
   const content = document.createElement("div");
   content.className = "message-content";
@@ -854,10 +957,11 @@ async function loadAdminData() {
       copy.className = "admin-row-copy";
       const title = document.createElement("div");
       title.className = "admin-row-title";
-      title.textContent = account.username;
+      title.textContent = account.public_name || account.username;
       const detail = document.createElement("div");
       detail.className = "admin-row-detail";
-      detail.textContent = `${account.role === "admin" ? "Admin" : "Member"} · ${account.message_count} messages · joined ${formatAdminTime(account.created_at)}`;
+      const animalLabel = account.display_name ? ` · animal ${account.username}` : "";
+      detail.textContent = `${account.role === "admin" ? "Admin" : "Member"}${animalLabel} · ${account.message_count} messages · joined ${formatAdminTime(account.created_at)}`;
       copy.append(title, detail);
       row.append(copy);
       if (account.username !== "Cricket" && account.role !== "admin") {
@@ -866,7 +970,7 @@ async function loadAdminData() {
         button.type = "button";
         button.textContent = "Delete account";
         button.addEventListener("click", async () => {
-          if (!window.confirm(`Delete ${account.username} and mark all of their messages [DELETED]?`)) return;
+          if (!window.confirm(`Delete ${account.public_name || account.username} and mark all of their messages [DELETED]?`)) return;
           button.disabled = true;
           try {
             await api(`/api/admin/accounts/${account.id}`, { method: "DELETE" });
@@ -1245,6 +1349,7 @@ function setRoomView(view) {
     loadDmMessages();
   }
   if (showAdmin) loadAdminData();
+  if (showSettings) refreshProfileSettings();
   if (showChat || showDms) syncReadState(unreadState, true);
   setMenuOpen(false);
 }
@@ -1255,6 +1360,57 @@ chatTab.addEventListener("click", () => setRoomView("chat"));
 dmTab.addEventListener("click", () => setRoomView("dms"));
 settingsTab.addEventListener("click", () => setRoomView("settings"));
 adminTab.addEventListener("click", () => setRoomView("admin"));
+document.querySelector("#displayNameForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const saveButton = document.querySelector("#saveDisplayName");
+  saveButton.disabled = true;
+  showProfileError("");
+  try {
+    const data = await api("/api/profile", {
+      method: "PATCH",
+      body: JSON.stringify({ display_name: document.querySelector("#displayNameInput").value }),
+    });
+    applyCurrentUser(data.user);
+  } catch (error) {
+    showProfileError(error.message);
+  } finally {
+    saveButton.disabled = false;
+  }
+});
+document.querySelector("#avatarInput").addEventListener("change", async event => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  showProfileError("");
+  const body = new FormData();
+  body.append("avatar", file);
+  try {
+    const response = await fetch("/api/profile/avatar", {
+      method: "POST",
+      headers: { "X-CSRF-Token": csrfToken },
+      body,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(data.error || "Could not upload that photo.");
+      error.status = response.status;
+      throw error;
+    }
+    if (data.csrf_token) csrfToken = data.csrf_token;
+    applyCurrentUser(data.user);
+  } catch (error) {
+    showProfileError(error.message);
+  }
+});
+document.querySelector("#removeAvatarButton").addEventListener("click", async () => {
+  showProfileError("");
+  try {
+    const data = await api("/api/profile/avatar", { method: "DELETE" });
+    applyCurrentUser(data.user);
+  } catch (error) {
+    showProfileError(error.message);
+  }
+});
 dmBackButton.addEventListener("click", () => {
   resetDmConversationPane();
   renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
@@ -1304,10 +1460,12 @@ warningAction.addEventListener("click", async () => {
     currentUser.warning_count = 0;
     warningKind = null;
     warningScreen.hidden = true;
+    maybeShowVersionNotes();
   } catch (error) {
     showWarning("account", error.message);
   }
 });
+document.querySelector("#versionNotesAction").addEventListener("click", dismissVersionNotes);
 accountForm.addEventListener("submit", async event => {
   event.preventDefault();
   authError.hidden = true;
