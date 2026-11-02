@@ -66,6 +66,15 @@ class ChatroomTests(unittest.TestCase):
         self.assertEqual(share.status_code, 200)
         self.assertIn(b"World Chat", share.data)
 
+    def test_complete_unicode_emoji_picker_data_is_served(self):
+        page = self.client.get("/")
+        dataset = self.client.get("/static/emoji-data.js")
+        self.assertIn(b"/static/emoji-data.js", page.data)
+        self.assertEqual(dataset.status_code, 200)
+        self.assertIn(b"Unicode Emoji 17.0", dataset.data)
+        self.assertGreaterEqual(dataset.data.count(b"],["), 3900)
+        dataset.close()
+
     def create_account(self, client=None):
         client = client or self.client
         token = client.get("/api/session").json["csrf_token"]

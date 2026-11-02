@@ -1523,21 +1523,86 @@ function insertEmoji(input, emoji) {
   input.focus();
 }
 
+if (!Array.isArray(window.CHAT_EMOJIS)) {
+  throw new Error("The emoji dataset could not be loaded.");
+}
+
+const emojiCategories = [...new Set(window.CHAT_EMOJIS.map(([, , category]) => category))];
+
+function renderEmojiPicker(wrap) {
+  const search = wrap.querySelector(".emoji-search");
+  const category = wrap.querySelector(".emoji-category");
+  const resultCount = wrap.querySelector(".emoji-result-count");
+  const grid = wrap.querySelector(".emoji-grid");
+  const query = search.value.trim().toLocaleLowerCase();
+  const matchingEmojis = window.CHAT_EMOJIS.filter(([emoji, name, emojiCategory]) => {
+    if (query) return `${name} ${emojiCategory} ${emoji}`.toLocaleLowerCase().includes(query);
+    return category.value === "all" || emojiCategory === category.value;
+  });
+  const fragment = document.createDocumentFragment();
+
+  matchingEmojis.forEach(([emoji, name], index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = emoji;
+    button.title = name;
+    button.setAttribute("aria-label", name);
+    button.tabIndex = index === 0 ? 0 : -1;
+    fragment.append(button);
+  });
+
+  grid.replaceChildren(fragment);
+  resultCount.textContent = matchingEmojis.length
+    ? `${matchingEmojis.length.toLocaleString()} emojis`
+    : "No emojis found";
+}
+
 const emojiPickerWraps = document.querySelectorAll(".emoji-picker-wrap");
 emojiPickerWraps.forEach(wrap => {
   const toggle = wrap.querySelector(".emoji-button");
   const picker = wrap.querySelector(".emoji-picker");
+  const search = wrap.querySelector(".emoji-search");
+  const category = wrap.querySelector(".emoji-category");
+  const grid = wrap.querySelector(".emoji-grid");
+  category.add(new Option("All categories", "all"));
+  emojiCategories.forEach(name => category.add(new Option(name, name)));
+  category.value = "Smileys & Emotion";
+  renderEmojiPicker(wrap);
+
   toggle.addEventListener("click", () => {
     const expanded = toggle.getAttribute("aria-expanded") === "true";
     toggle.setAttribute("aria-expanded", String(!expanded));
     picker.hidden = expanded;
+    if (!expanded) search.focus();
   });
+  search.addEventListener("input", () => renderEmojiPicker(wrap));
+  category.addEventListener("change", () => renderEmojiPicker(wrap));
   picker.addEventListener("click", event => {
     const selectedButton = event.target.closest("button");
-    if (!selectedButton) return;
+    if (!selectedButton || !grid.contains(selectedButton)) return;
     insertEmoji(wrap.closest("form")?.querySelector("textarea"), selectedButton.textContent.trim());
     picker.hidden = true;
     toggle.setAttribute("aria-expanded", "false");
+  });
+  grid.addEventListener("keydown", event => {
+    const currentButton = event.target.closest("button");
+    if (!currentButton) return;
+    const buttons = [...grid.querySelectorAll("button")];
+    const currentIndex = buttons.indexOf(currentButton);
+    const columns = 8;
+    const nextIndex = {
+      ArrowLeft: currentIndex - 1,
+      ArrowRight: currentIndex + 1,
+      ArrowUp: currentIndex - columns,
+      ArrowDown: currentIndex + columns,
+      Home: 0,
+      End: buttons.length - 1,
+    }[event.key];
+    if (nextIndex === undefined || nextIndex < 0 || nextIndex >= buttons.length) return;
+    event.preventDefault();
+    currentButton.tabIndex = -1;
+    buttons[nextIndex].tabIndex = 0;
+    buttons[nextIndex].focus();
   });
 });
 document.addEventListener("click", event => {

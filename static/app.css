@@ -321,6 +321,8 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   font-size: 18px;
   line-height: 1;
 }
+.emoji-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.emoji-button .smile-eye { fill: currentColor; stroke: none; }
 .emoji-button:hover:not(:disabled) { background: var(--quote); color: var(--ink); }
 .emoji-button:disabled { cursor: default; opacity: .42; }
 .emoji-picker {
@@ -328,18 +330,24 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   z-index: 5;
   bottom: calc(100% + 8px);
   left: 0;
-  display: grid;
-  grid-template-columns: repeat(6, 36px);
-  gap: 2px;
-  padding: 7px;
+  display: flex;
+  width: min(340px, calc(100vw - 32px));
+  max-height: 370px;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--surface);
   box-shadow: 0 6px 20px #2c44351a;
 }
 .emoji-picker[hidden] { display: none; }
-.emoji-picker button { display: grid; width: 36px; height: 36px; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; font-size: 20px; cursor: pointer; }
+.emoji-search, .emoji-category { width: 100%; min-height: 34px; padding: 6px 8px; border: 1px solid var(--field-border); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; }
+.emoji-result-count { flex: 0 0 auto; margin: 0; color: var(--faint); font-size: 10px; }
+.emoji-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 2px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.emoji-grid button { display: grid; min-width: 0; aspect-ratio: 1; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; font-size: 20px; cursor: pointer; }
 .emoji-picker button:hover, .emoji-picker button:focus-visible { background: var(--quote); outline: 0; }
+.emoji-grid button:focus-visible { outline: 2px solid var(--field-line); outline-offset: -2px; }
 .send-button { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 4px; background: var(--green); color: var(--on-green); font-size: 11px; font-weight: 600; }
 .send-button:hover:not(:disabled) { background: var(--green-deep); }
 .send-button:disabled { cursor: default; opacity: .42; }

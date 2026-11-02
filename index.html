@@ -25,7 +25,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='dm-pages') }}">
-  <script src="{{ url_for('static', filename='app.js', v='dm-composer-error') }}" defer></script>
+  <script src="{{ url_for('static', filename='emoji-data.js', v='unicode-17.0') }}" defer></script>
+  <script src="{{ url_for('static', filename='app.js', v='emoji-picker-all') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -110,19 +111,14 @@
                 <textarea id="messageInput" maxlength="500" rows="1" placeholder="Message the room..." aria-label="Write a message"></textarea>
                 <div class="composer-bottom">
                   <div class="emoji-picker-wrap">
-                    <button class="emoji-button" type="button" title="Choose an emoji" aria-label="Choose an emoji" aria-expanded="false" aria-controls="chatEmojiPicker">😊</button>
+                    <button class="emoji-button" type="button" title="Choose an emoji" aria-label="Choose an emoji" aria-expanded="false" aria-controls="chatEmojiPicker">
+                      <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><circle class="smile-eye" cx="9" cy="10" r=".7"></circle><circle class="smile-eye" cx="15" cy="10" r=".7"></circle><path d="M8.5 14a4.2 4.2 0 0 0 7 0"></path></svg>
+                    </button>
                     <div class="emoji-picker" id="chatEmojiPicker" role="group" aria-label="Choose an emoji" hidden>
-                      <button type="button" aria-label="Grinning face">😀</button>
-                      <button type="button" aria-label="Face with tears of joy">😂</button>
-                      <button type="button" aria-label="Smiling face with heart-eyes">😍</button>
-                      <button type="button" aria-label="Smiling face with sunglasses">😎</button>
-                      <button type="button" aria-label="Crying face">😢</button>
-                      <button type="button" aria-label="Surprised face">😮</button>
-                      <button type="button" aria-label="Thumbs up">👍</button>
-                      <button type="button" aria-label="Thumbs down">👎</button>
-                      <button type="button" aria-label="Red heart">❤️</button>
-                      <button type="button" aria-label="Fire">🔥</button>
-                      <button type="button" aria-label="Party popper">🎉</button>
+                      <input class="emoji-search" type="search" placeholder="Search all emojis" aria-label="Search all emojis">
+                      <select class="emoji-category" aria-label="Emoji category"></select>
+                      <p class="emoji-result-count" aria-live="polite"></p>
+                      <div class="emoji-grid" role="group" aria-label="Emoji choices"></div>
                     </div>
                   </div>
                   <button class="send-button" id="sendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
@@ -167,19 +163,14 @@
                     <textarea id="dmMessageInput" maxlength="500" rows="1" placeholder="Choose someone to message..." aria-label="Write a direct message" disabled></textarea>
                     <div class="composer-bottom">
                       <div class="emoji-picker-wrap">
-                        <button class="emoji-button" type="button" title="Choose an emoji" aria-label="Choose an emoji" aria-expanded="false" aria-controls="dmEmojiPicker">😊</button>
+                        <button class="emoji-button" type="button" title="Choose an emoji" aria-label="Choose an emoji" aria-expanded="false" aria-controls="dmEmojiPicker">
+                          <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><circle class="smile-eye" cx="9" cy="10" r=".7"></circle><circle class="smile-eye" cx="15" cy="10" r=".7"></circle><path d="M8.5 14a4.2 4.2 0 0 0 7 0"></path></svg>
+                        </button>
                         <div class="emoji-picker" id="dmEmojiPicker" role="group" aria-label="Choose an emoji" hidden>
-                          <button type="button" aria-label="Grinning face">😀</button>
-                          <button type="button" aria-label="Face with tears of joy">😂</button>
-                          <button type="button" aria-label="Smiling face with heart-eyes">😍</button>
-                          <button type="button" aria-label="Smiling face with sunglasses">😎</button>
-                          <button type="button" aria-label="Crying face">😢</button>
-                          <button type="button" aria-label="Surprised face">😮</button>
-                          <button type="button" aria-label="Thumbs up">👍</button>
-                          <button type="button" aria-label="Thumbs down">👎</button>
-                          <button type="button" aria-label="Red heart">❤️</button>
-                          <button type="button" aria-label="Fire">🔥</button>
-                          <button type="button" aria-label="Party popper">🎉</button>
+                          <input class="emoji-search" type="search" placeholder="Search all emojis" aria-label="Search all emojis">
+                          <select class="emoji-category" aria-label="Emoji category"></select>
+                          <p class="emoji-result-count" aria-live="polite"></p>
+                          <div class="emoji-grid" role="group" aria-label="Emoji choices"></div>
                         </div>
                       </div>
                       <button class="send-button" id="dmSendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
@@ -232,7 +223,7 @@
         <button class="login-submit" id="warningAction" type="button">Continue</button>
       </section>
     </div>
-    <footer class="app-footer">v1.9.0</footer>
+    <footer class="app-footer">v1.10.0</footer>
   </div>
 </body>
 </html>
