@@ -535,7 +535,12 @@ def create_app(test_config=None):
                 names.add(row["display_name"].casefold())
         return names
 
-    def author_fields(animal_username, display_name, account_id, avatar_ext, deleted=False):
+    def author_fields(animal_username, display_name, account_id, avatar_ext, deleted=False, use_profile=False):
+        """Build author fields for messages.
+
+        World chat stays anonymous (animal name, letter avatar). DMs can show
+        the member's optional display name and profile photo.
+        """
         if deleted or not animal_username or animal_username == "[DELETED]":
             return {
                 "username": "[DELETED]",
@@ -543,12 +548,19 @@ def create_app(test_config=None):
                 "display_name": None,
                 "avatar_url": None,
             }
-        public = public_name_from(animal_username, display_name)
+        if use_profile:
+            public = public_name_from(animal_username, display_name)
+            return {
+                "username": public,
+                "animal_username": animal_username,
+                "display_name": display_name or None,
+                "avatar_url": avatar_url_for(account_id, avatar_ext),
+            }
         return {
-            "username": public,
+            "username": animal_username,
             "animal_username": animal_username,
-            "display_name": display_name or None,
-            "avatar_url": avatar_url_for(account_id, avatar_ext),
+            "display_name": None,
+            "avatar_url": None,
         }
 
     def pending_warning_count(database, account_id):
@@ -1025,6 +1037,7 @@ def create_app(test_config=None):
                 row["author_id"],
                 row["author_avatar_ext"],
                 deleted=row["animal_username"] is None,
+                use_profile=False,
             )
             reply_to = None
             if row["reply_id"] is not None:
@@ -1034,6 +1047,7 @@ def create_app(test_config=None):
                     row["reply_author_id"],
                     row["reply_avatar_ext"],
                     deleted=bool(row["reply_deleted"]),
+                    use_profile=False,
                 )
                 reply_to = {
                     "id": row["reply_id"],
@@ -1096,12 +1110,7 @@ def create_app(test_config=None):
         )
         message_id = inserted_id(cursor)
         database.commit()
-        send_room_push(
-            database,
-            g.account["id"],
-            public_name_from(g.account["username"], mapping_get(g.account, "display_name")),
-            message_id,
-        )
+        send_room_push(database, g.account["id"], g.account["username"], message_id)
         return jsonify(id=message_id), 201
 
     @app.post("/api/reads")
@@ -1254,6 +1263,7 @@ def create_app(test_config=None):
                 row["display_name"],
                 row["sender_id"],
                 row["avatar_ext"],
+                use_profile=True,
             )
             reply_to = None
             if row["reply_id"] is not None:
@@ -1263,6 +1273,7 @@ def create_app(test_config=None):
                     row["reply_author_id"],
                     row["reply_avatar_ext"],
                     deleted=row["reply_animal_username"] is None,
+                    use_profile=True,
                 )
                 reply_to = {
                     "id": row["reply_id"],

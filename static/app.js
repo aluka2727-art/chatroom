@@ -19,8 +19,8 @@ const APP_VERSION = "1.11.0";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
   "1.11.0": [
-    "Set a custom display name in Settings — it shows in chat and DMs.",
-    "Upload a profile photo (JPEG, PNG, or WebP, up to 256 KB).",
+    "Set a custom display name and profile photo in Settings — they show in DMs only.",
+    "World Chat stays anonymous with your animal username.",
     "Sign in with either your animal username or your display name.",
     "Searchable emoji picker in chat and DMs.",
     "Stronger free message filtering for swearing, insults, and common evasions.",

@@ -493,9 +493,22 @@ class ChatroomTests(unittest.TestCase):
         )
         self.assertEqual(posted.status_code, 201)
         message = self.client.get("/api/messages").json["messages"][0]
-        self.assertEqual(message["username"], "Lucas Chat")
+        self.assertEqual(message["username"], user["username"])
         self.assertEqual(message["animal_username"], user["username"])
-        self.assertTrue(message["avatar_url"].endswith(f"/api/avatars/{user['id']}"))
+        self.assertIsNone(message["avatar_url"])
+
+        partner_client = self.app.test_client()
+        partner, _partner_token = self.create_account(partner_client)
+        dm = self.client.post(
+            f"/api/dms/{partner['id']}",
+            json={"text": "Private hello"},
+            headers={"X-CSRF-Token": self.client.get("/api/session").json["csrf_token"]},
+        )
+        self.assertEqual(dm.status_code, 201)
+        dm_message = partner_client.get(f"/api/dms/{user['id']}").json["messages"][0]
+        self.assertEqual(dm_message["username"], "Lucas Chat")
+        self.assertEqual(dm_message["animal_username"], user["username"])
+        self.assertTrue(dm_message["avatar_url"].endswith(f"/api/avatars/{user['id']}"))
 
         other = self.app.test_client()
         csrf = other.get("/api/session").json["csrf_token"]
