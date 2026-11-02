@@ -414,6 +414,10 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 }
 .emoji-picker[hidden] { display: none; }
 .emoji-search, .emoji-category { width: 100%; min-height: 34px; padding: 6px 8px; border: 1px solid var(--field-border); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; }
+.emoji-button,
+.emoji-grid button,
+.emoji-search,
+.emoji-category { touch-action: manipulation; }
 .emoji-result-count { flex: 0 0 auto; margin: 0; color: var(--faint); font-size: 10px; }
 .emoji-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 2px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .emoji-grid button { display: grid; min-width: 0; aspect-ratio: 1; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; font-size: 20px; cursor: pointer; }
@@ -485,7 +489,10 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   .room-heading-bar { gap: 8px; }
   .account-controls { gap: 8px; }
   .login-panel { padding: 26px 22px; }
-  .auth-input, .composer textarea { font-size: 16px; }
+  .auth-input,
+  .composer textarea,
+  .emoji-search,
+  .emoji-category { font-size: 16px; }
   .menu-button {
     position: relative;
     display: grid;
