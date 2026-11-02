@@ -202,12 +202,10 @@ POSTGRES_STATEMENTS = (
     )
     """,
     "ALTER TABLE deleted_accounts ADD COLUMN IF NOT EXISTS display_name TEXT",
+    # Non-unique: legacy rows may share usernames from before permanent reservation.
+    "CREATE INDEX IF NOT EXISTS deleted_accounts_username_ci ON deleted_accounts (lower(username))",
     """
-    CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_username_ci
-        ON deleted_accounts (lower(username))
-    """,
-    """
-    CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_display_name_ci
+    CREATE INDEX IF NOT EXISTS deleted_accounts_display_name_ci
         ON deleted_accounts (lower(display_name))
         WHERE display_name IS NOT NULL
     """,

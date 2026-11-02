@@ -428,11 +428,6 @@ def create_app(test_config=None):
                 display_name TEXT,
                 deleted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_username_ci
-                ON deleted_accounts(username COLLATE NOCASE);
-            CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_display_name_ci
-                ON deleted_accounts(display_name COLLATE NOCASE)
-                WHERE display_name IS NOT NULL;
             CREATE TABLE IF NOT EXISTS account_warnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -461,15 +456,19 @@ def create_app(test_config=None):
         }
         if "display_name" not in deleted_columns:
             database.execute("ALTER TABLE deleted_accounts ADD COLUMN display_name TEXT")
+        # Non-unique indexes only: older DBs may already have duplicate deleted
+        # usernames from before names were permanently reserved.
+        database.execute("DROP INDEX IF EXISTS deleted_accounts_username_ci")
+        database.execute("DROP INDEX IF EXISTS deleted_accounts_display_name_ci")
         database.execute(
             """
-            CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_username_ci
+            CREATE INDEX IF NOT EXISTS deleted_accounts_username_ci
                 ON deleted_accounts(username COLLATE NOCASE)
             """
         )
         database.execute(
             """
-            CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_display_name_ci
+            CREATE INDEX IF NOT EXISTS deleted_accounts_display_name_ci
                 ON deleted_accounts(display_name COLLATE NOCASE)
                 WHERE display_name IS NOT NULL
             """
