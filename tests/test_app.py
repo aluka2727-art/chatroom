@@ -544,7 +544,8 @@ class ChatroomTests(unittest.TestCase):
         self.assertEqual(animal_signin.status_code, 200)
         self.assertEqual(animal_signin.json["user"]["id"], user["id"])
 
-    def test_deleted_author_stays_deleted_after_username_reuse(self):
+    def test_deleted_author_stays_deleted_when_name_is_reserved(self):
+        admin_client, _admin_token = self.create_admin()
         old_user, old_token = self.create_account()
         self.client.post(
             "/api/messages",
@@ -552,12 +553,17 @@ class ChatroomTests(unittest.TestCase):
             headers={"X-CSRF-Token": old_token},
         )
         old_username = old_user["username"]
-        with sqlite3.connect(self.database_path) as database:
-            database.execute("DELETE FROM accounts WHERE username = ?", (old_username,))
+        accounts = admin_client.get("/api/admin/accounts").json["accounts"]
+        member_account = next(account for account in accounts if account["username"] == old_username)
+        admin_token = admin_client.get("/api/session").json["csrf_token"]
+        deleted = admin_client.delete(
+            f"/api/admin/accounts/{member_account['id']}",
+            headers={"X-CSRF-Token": admin_token},
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.json)
 
-        with patch("app.secrets.choice", return_value=old_username):
-            new_user, new_token = self.create_account()
-        self.assertEqual(new_user["username"], old_username)
+        new_user, new_token = self.create_account()
+        self.assertNotEqual(new_user["username"], old_username)
 
         response = self.client.get("/api/messages").json["messages"]
         self.assertEqual(response[0]["username"], "[DELETED]")
@@ -567,7 +573,10 @@ class ChatroomTests(unittest.TestCase):
             headers={"X-CSRF-Token": new_token},
         )
         response = self.client.get("/api/messages").json["messages"]
-        self.assertEqual([message["username"] for message in response], ["[DELETED]", old_username])
+        self.assertEqual(
+            [message["username"] for message in response],
+            ["[DELETED]", new_user["username"]],
+        )
 
     def test_cricket_is_reserved_and_delete_command_protects_admin(self):
         result = self.app.test_cli_runner().invoke(
@@ -624,10 +633,15 @@ class ChatroomTests(unittest.TestCase):
             remaining = database.execute("SELECT username, role FROM accounts").fetchall()
         self.assertEqual(remaining, [("Viper", "admin")])
 
-    def test_admin_account_delete_tombstones_messages_and_releases_name(self):
+    def test_admin_account_delete_tombstones_messages_and_keeps_name_reserved(self):
         admin_client, _admin_token = self.create_admin()
         member_client = self.app.test_client()
         member, member_token = self.create_account(member_client)
+        member_client.patch(
+            "/api/profile",
+            json={"display_name": "Taken Display"},
+            headers={"X-CSRF-Token": member_token},
+        )
         member_client.post(
             "/api/messages",
             json={"text": "This belongs to the deleted profile"},
@@ -643,14 +657,32 @@ class ChatroomTests(unittest.TestCase):
             headers={"X-CSRF-Token": admin_token},
         )
         self.assertEqual(deleted.status_code, 200, deleted.json)
+
+        # Deleted animal/display names stay reserved and cannot be reused.
+        other_client = self.app.test_client()
         with patch("app.secrets.choice", return_value=member["username"]):
-            replacement, _replacement_token = self.create_account(self.app.test_client())
-        self.assertEqual(replacement["username"], member["username"])
+            reserved_attempt = other_client.post(
+                "/api/auth",
+                json={
+                    "mode": "create",
+                    "password": "correct-horse-battery",
+                    "confirm_password": "correct-horse-battery",
+                },
+                headers={"X-CSRF-Token": other_client.get("/api/session").json["csrf_token"]},
+            )
+        self.assertEqual(reserved_attempt.status_code, 409)
+        other, other_token = self.create_account(other_client)
+        self.assertNotEqual(other["username"], member["username"])
+        blocked_display = other_client.patch(
+            "/api/profile",
+            json={"display_name": "taken display"},
+            headers={"X-CSRF-Token": other_token},
+        )
+        self.assertEqual(blocked_display.status_code, 409)
 
         retained = admin_client.get(f"/api/messages?after={message_cursor}").json["messages"]
         self.assertEqual(retained[0]["username"], "[DELETED]")
         self.assertEqual(retained[0]["text"], "[DELETED]")
-        self.assertNotEqual(replacement["id"], member["id"])
         deleted_session = member_client.get("/api/messages")
         self.assertEqual(deleted_session.status_code, 410)
         self.assertTrue(deleted_session.json["account_deleted"])

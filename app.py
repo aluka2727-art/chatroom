@@ -425,8 +425,14 @@ def create_app(test_config=None):
             CREATE TABLE IF NOT EXISTS deleted_accounts (
                 account_id INTEGER PRIMARY KEY,
                 username TEXT NOT NULL,
+                display_name TEXT,
                 deleted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_username_ci
+                ON deleted_accounts(username COLLATE NOCASE);
+            CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_display_name_ci
+                ON deleted_accounts(display_name COLLATE NOCASE)
+                WHERE display_name IS NOT NULL;
             CREATE TABLE IF NOT EXISTS account_warnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -447,6 +453,24 @@ def create_app(test_config=None):
             """
             CREATE UNIQUE INDEX IF NOT EXISTS accounts_display_name_ci
                 ON accounts(display_name COLLATE NOCASE)
+                WHERE display_name IS NOT NULL
+            """
+        )
+        deleted_columns = {
+            row["name"] for row in database.execute("PRAGMA table_info(deleted_accounts)")
+        }
+        if "display_name" not in deleted_columns:
+            database.execute("ALTER TABLE deleted_accounts ADD COLUMN display_name TEXT")
+        database.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_username_ci
+                ON deleted_accounts(username COLLATE NOCASE)
+            """
+        )
+        database.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_display_name_ci
+                ON deleted_accounts(display_name COLLATE NOCASE)
                 WHERE display_name IS NOT NULL
             """
         )
@@ -526,10 +550,15 @@ def create_app(test_config=None):
         ).fetchone()
 
     def taken_identity_names(database, exclude_account_id=None):
+        """Return casefolded animal/display names already claimed (active or deleted)."""
         names = set()
         for row in database.execute("SELECT id, username, display_name FROM accounts"):
             if exclude_account_id is not None and row["id"] == exclude_account_id:
                 continue
+            names.add(row["username"].casefold())
+            if row["display_name"]:
+                names.add(row["display_name"].casefold())
+        for row in database.execute("SELECT username, display_name FROM deleted_accounts"):
             names.add(row["username"].casefold())
             if row["display_name"]:
                 names.add(row["display_name"].casefold())
@@ -783,14 +812,16 @@ def create_app(test_config=None):
         return wrapped
 
     def tombstone_account(database, account):
+        display_name = mapping_get(account, "display_name") or None
         database.execute(
             """
-            INSERT INTO deleted_accounts (account_id, username) VALUES (?, ?)
+            INSERT INTO deleted_accounts (account_id, username, display_name) VALUES (?, ?, ?)
             ON CONFLICT(account_id) DO UPDATE SET
                 username = excluded.username,
+                display_name = excluded.display_name,
                 deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             """,
-            (account["id"], account["username"]),
+            (account["id"], account["username"], display_name),
         )
         database.execute(
             "UPDATE messages SET body = '[DELETED]', is_deleted = 1, author_id = NULL WHERE author_id = ?",
@@ -873,6 +904,10 @@ def create_app(test_config=None):
                     database.rollback()
                     return jsonify(error="No animal usernames are available."), 409
                 username = secrets.choice(available)
+                # Guard against reserved/deleted names even if choice is patched or raced.
+                if username.casefold() not in {name.casefold() for name in available}:
+                    database.rollback()
+                    return jsonify(error="That username is already taken."), 409
                 password_hash = generate_password_hash(password)
                 cursor = database.execute(
                     "INSERT INTO accounts (username, password_hash) VALUES (?, ?) RETURNING id",
@@ -1635,7 +1670,7 @@ def create_app(test_config=None):
         database = get_db()
         database.execute("BEGIN IMMEDIATE")
         account = database.execute(
-            "SELECT id, username, role FROM accounts WHERE id = ?",
+            "SELECT id, username, display_name, role FROM accounts WHERE id = ?",
             (account_id,),
         ).fetchone()
         if account is None:
@@ -1719,11 +1754,8 @@ def create_app(test_config=None):
             raise click.ClickException("Account not found.")
 
         updated_username = new_username or account["username"]
-        conflict = database.execute(
-            "SELECT 1 FROM accounts WHERE username = ? COLLATE NOCASE AND id != ?",
-            (updated_username, account["id"]),
-        ).fetchone()
-        if conflict:
+        taken = taken_identity_names(database, exclude_account_id=account["id"])
+        if updated_username.casefold() in taken:
             database.rollback()
             raise click.ClickException(f"Username {updated_username} is already in use.")
 
@@ -1740,7 +1772,7 @@ def create_app(test_config=None):
         """Delete a member; their messages remain marked [DELETED]."""
         database = get_db()
         account = database.execute(
-            "SELECT id, username, role FROM accounts WHERE username = ? COLLATE NOCASE",
+            "SELECT id, username, display_name, role FROM accounts WHERE username = ? COLLATE NOCASE",
             (username,),
         ).fetchone()
         if account is None:
@@ -1761,7 +1793,7 @@ def create_app(test_config=None):
         if admin is None:
             raise click.ClickException("No admin account exists; nothing was deleted.")
         members = database.execute(
-            "SELECT id, username FROM accounts WHERE id != ? AND role != 'admin'",
+            "SELECT id, username, display_name FROM accounts WHERE id != ? AND role != 'admin'",
             (admin["id"],),
         ).fetchall()
         for member in members:

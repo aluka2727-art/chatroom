@@ -195,10 +195,21 @@ POSTGRES_STATEMENTS = (
     CREATE TABLE IF NOT EXISTS deleted_accounts (
         account_id BIGINT PRIMARY KEY,
         username TEXT NOT NULL,
+        display_name TEXT,
         deleted_at TEXT NOT NULL DEFAULT (
             to_char(timezone('utc', clock_timestamp()), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
         )
     )
+    """,
+    "ALTER TABLE deleted_accounts ADD COLUMN IF NOT EXISTS display_name TEXT",
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_username_ci
+        ON deleted_accounts (lower(username))
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS deleted_accounts_display_name_ci
+        ON deleted_accounts (lower(display_name))
+        WHERE display_name IS NOT NULL
     """,
     """
     CREATE TABLE IF NOT EXISTS account_warnings (
@@ -301,12 +312,19 @@ def copy_sqlite_to_postgres(connection, sqlite_path):
                     row["created_at"],
                 ),
             )
-        for row in source.execute(
-            "SELECT account_id, username, deleted_at FROM deleted_accounts"
-        ):
+        deleted_columns = {row["name"] for row in source.execute("PRAGMA table_info(deleted_accounts)")}
+        for row in source.execute("SELECT * FROM deleted_accounts"):
             connection.execute(
-                "INSERT INTO deleted_accounts (account_id, username, deleted_at) VALUES (?, ?, ?)",
-                (row["account_id"], row["username"], row["deleted_at"]),
+                """
+                INSERT INTO deleted_accounts (account_id, username, display_name, deleted_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    row["account_id"],
+                    row["username"],
+                    row["display_name"] if "display_name" in deleted_columns else None,
+                    row["deleted_at"],
+                ),
             )
         messages = source.execute(
             "SELECT id, author_id, body, is_deleted, reply_to_id, created_at FROM messages ORDER BY id"
