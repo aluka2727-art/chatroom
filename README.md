@@ -6,9 +6,9 @@ Browser-local profiles from the earlier static demo are not imported. Create the
 
 The app has a 100-account limit. `Cricket` is reserved for the initial admin account. Admin accounts cannot be deleted through the app or the member-delete command.
 
-The **DMS** side tab lists only people you’ve already messaged. Search by animal or display name to start a new private conversation. Direct messages are visible only to their sender and recipient and are removed if either account is deleted. Select **Reply** on a DM to quote it in that conversation.
+The **DMS** side tab lists only people you’ve already messaged. Search by display name to start a new private conversation. Animal usernames are only searchable for accounts that have not set a display name. Direct messages are visible only to their sender and recipient and are removed if either account is deleted. Select **Reply** on a DM to quote it in that conversation.
 
-In **SETTINGS**, set an optional display name and profile photo. Those show in **DMs** only; World Chat stays anonymous with your animal username. Sign in with either your animal username or your display name (plus password). Photos must be JPEG, PNG, or WebP and 256 KB or smaller. Animal usernames and display names are unique forever — even after an account is deleted, those names cannot be reused.
+In **SETTINGS**, set an optional display name and profile photo. Those show in **DMs** only; World Chat stays anonymous with your animal username. Sign in with either your animal username or your display name (plus password). Photos must be JPEG, PNG, or WebP; larger photos are resized in the browser before upload. Animal usernames and display names are unique forever — even after an account is deleted, those names cannot be reused.
 
 In the room chat, select **Reply** on a message to quote it in your next message. If the original message is deleted, its quote is shown as `[DELETED]`.
 
@@ -34,7 +34,7 @@ The command prompts for Cricket's password without echoing it. Use at least 8 ch
 
 Room chat and DMs always check a free local blocklist (profanity, slurs, compounds like `fucktard`, and common evasions). To also block hate, harassment, sexual content, and violence with OpenAI's **free** Moderations API, add `OPENAI_API_KEY=...` to the same `.env` file (from [platform.openai.com](https://platform.openai.com/api-keys)). If the key is omitted, only the local filter runs. There is no paid Chat usage.
 
-Direct-message alerts use browser push. The first time a signed-in member opens the DMS tab, the app writes `vapid_private.pem` and `vapid_public.txt` next to the database. Leave those files on the server and out of git. Members turn alerts on with **Enable notifications** in the DMS tab. On an iPhone, add the site to the Home Screen from Safari and open PIGIN from that icon before enabling alerts. To supply keys yourself, set `CHATROOM_VAPID_PUBLIC_KEY` to the URL-safe base64 application server key, `CHATROOM_VAPID_PRIVATE_KEY_FILE` to the private PEM path, and `CHATROOM_VAPID_SUBJECT` to a `mailto:` address for this site.
+Direct-message alerts use browser push. The first time a signed-in member opens the DMS tab, the app writes `vapid_private.pem` and `vapid_public.txt` next to the database. Leave those files on the server and out of git. Members turn alerts on with **Enable notifications** in the DMS tab. On an iPhone, add the site to the Home Screen from Safari and open PIGIN from that icon before enabling alerts. Reading a chat or DM on one device syncs to your other devices: matching notifications are dismissed and the app badge updates. To supply keys yourself, set `CHATROOM_VAPID_PUBLIC_KEY` to the URL-safe base64 application server key, `CHATROOM_VAPID_PRIVATE_KEY_FILE` to the private PEM path, and `CHATROOM_VAPID_SUBJECT` to a `mailto:` address for this site.
 
 To rename an existing account and promote it to admin, back up the database, then run `flask --app app promote-admin Reindeer --rename-to Viper` with the same database settings the app uses. This keeps the account ID and its message history.
 

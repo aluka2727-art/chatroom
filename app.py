@@ -56,6 +56,28 @@ AVATAR_CONTENT_TYPES = {
     "image/png": "png",
     "image/webp": "webp",
 }
+AVATAR_EXTENSIONS = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+}
+
+
+def detect_avatar_extension(payload, content_type="", filename=""):
+    content_type = (content_type or "").lower().split(";")[0].strip()
+    if content_type in AVATAR_CONTENT_TYPES:
+        return AVATAR_CONTENT_TYPES[content_type]
+    if payload.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        return "webp"
+    suffix = Path(filename or "").suffix.lower().lstrip(".")
+    if suffix in AVATAR_EXTENSIONS:
+        return "jpg" if suffix == "jpeg" else suffix
+    return None
 OPENAI_MODERATION_URL = "https://api.openai.com/v1/moderations"
 MODERATION_REJECT_MESSAGE = "Message not allowed."
 # Free OpenAI Moderations categories.
@@ -691,10 +713,10 @@ def create_app(test_config=None):
             ).fetchall()
         }
 
-    def deliver_push(database, account_id, payload):
+    def deliver_push(database, account_id, payload, *, skip_foreground=True):
         if not push_is_configured():
             return
-        visible = foreground_endpoints(database, account_id)
+        visible = foreground_endpoints(database, account_id) if skip_foreground else set()
         subscriptions = database.execute(
             "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE account_id = ?",
             (account_id,),
@@ -732,6 +754,21 @@ def create_app(test_config=None):
                 ((sid,) for sid in expired_ids),
             )
             database.commit()
+
+    def send_read_sync(database, account_id, *, clear_tags=None, clear_all=False):
+        summary = unread_payload(database, account_id)
+        deliver_push(
+            database,
+            account_id,
+            {
+                "type": "read-sync",
+                "badgeCount": summary["total"],
+                "clearAll": bool(clear_all or summary["total"] == 0),
+                "clearTags": list(clear_tags or []),
+                "unread": summary,
+            },
+            skip_foreground=False,
+        )
 
     def send_room_push(database, author_id, author_username, message_id):
         recipients = database.execute(
@@ -1191,17 +1228,27 @@ def create_app(test_config=None):
         else:
             return jsonify(error="Invalid read target."), 400
         database.commit()
-        return jsonify(unread_payload(database, g.account["id"]))
+        summary = unread_payload(database, g.account["id"])
+        if kind == "chat":
+            send_read_sync(database, g.account["id"], clear_tags=["pigin-chat"])
+        else:
+            send_read_sync(
+                database,
+                g.account["id"],
+                clear_tags=[f"pigin-dm-{partner_id}"],
+            )
+        return jsonify(summary)
 
-    def serialize_dm_person(row, last_message=None, last_message_at=None):
+    def serialize_dm_person(row, last_message=None, last_message_at=None, include_animal=True):
         public = public_name_from(row["username"], row["display_name"])
         payload = {
             "id": row["id"],
             "username": public,
-            "animal_username": row["username"],
             "display_name": row["display_name"],
             "avatar_url": avatar_url_for(row["id"], row["avatar_ext"]),
         }
+        if include_animal:
+            payload["animal_username"] = row["username"]
         if last_message is not None or last_message_at is not None:
             payload["last_message"] = last_message
             payload["last_message_at"] = last_message_at
@@ -1251,16 +1298,21 @@ def create_app(test_config=None):
             .replace("_", "\\_")
         )
         pattern = f"%{escaped}%"
+        # Custom display names are always searchable. Animal usernames are only
+        # searchable when the account has not set a display name.
         rows = get_db().execute(
             """
             SELECT id, username, display_name, avatar_ext
             FROM accounts
             WHERE id != ?
               AND (
-                username LIKE ? ESCAPE '\\' COLLATE NOCASE
-                OR (
+                (
                     display_name IS NOT NULL
                     AND display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                )
+                OR (
+                    display_name IS NULL
+                    AND username LIKE ? ESCAPE '\\' COLLATE NOCASE
                 )
               )
             ORDER BY COALESCE(display_name, username) COLLATE NOCASE
@@ -1268,7 +1320,9 @@ def create_app(test_config=None):
             """,
             (g.account["id"], pattern, pattern),
         ).fetchall()
-        return jsonify(results=[serialize_dm_person(row) for row in rows])
+        return jsonify(results=[
+            serialize_dm_person(row, include_animal=False) for row in rows
+        ])
 
     @app.get("/api/dms/<int:account_id>")
     @login_required
@@ -1453,15 +1507,14 @@ def create_app(test_config=None):
         upload = request.files.get("avatar")
         if upload is None or not upload.filename:
             return jsonify(error="Choose an image to upload."), 400
-        content_type = (upload.mimetype or "").lower()
-        extension = AVATAR_CONTENT_TYPES.get(content_type)
-        if extension is None:
-            return jsonify(error="Use a JPEG, PNG, or WebP image."), 400
         payload = upload.read(AVATAR_MAX_BYTES + 1)
         if not payload:
             return jsonify(error="That image file is empty."), 400
         if len(payload) > AVATAR_MAX_BYTES:
             return jsonify(error="Images must be 256 KB or smaller."), 400
+        extension = detect_avatar_extension(payload, upload.mimetype, upload.filename)
+        if extension is None:
+            return jsonify(error="Use a JPEG, PNG, or WebP image."), 400
         clear_avatar_files(g.account["id"])
         avatar_path_for(g.account["id"], extension).write_bytes(payload)
         database = get_db()
@@ -1498,10 +1551,7 @@ def create_app(test_config=None):
         path = avatar_path_for(account_id, row["avatar_ext"])
         if not path.is_file():
             abort(404)
-        mime = next(
-            (content for content, ext in AVATAR_CONTENT_TYPES.items() if ext == row["avatar_ext"]),
-            "application/octet-stream",
-        )
+        mime = AVATAR_EXTENSIONS.get(row["avatar_ext"], "application/octet-stream")
         response = send_from_directory(path.parent, path.name, mimetype=mime)
         response.headers["Cache-Control"] = "private, max-age=3600"
         return response

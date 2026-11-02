@@ -15,9 +15,14 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.11.0";
+const APP_VERSION = "1.11.1";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.11.1": [
+    "Animal usernames stay private in search once you set a display name.",
+    "Profile photos resize automatically so larger uploads can be saved.",
+    "Reading messages on one device clears notifications and badges on your other devices.",
+  ],
   "1.11.0": [
     "Set a custom display name and profile photo in Settings — they show in DMs only.",
     "World Chat stays anonymous with your animal username.",
@@ -177,8 +182,10 @@ async function syncReadState(fallback, force = false) {
   const viewingDm = document.visibilityState === "visible" && activeView === "dms" && selectedDmUser;
   try {
     let summary = fallback;
+    let markedRead = false;
     if (viewingChat && (force || (fallback?.group || 0) > 0)) {
       summary = await api("/api/reads", { method: "POST", body: JSON.stringify({ kind: "chat" }) });
+      markedRead = true;
     } else if (
       viewingDm
       && (force || (fallback?.conversations?.[String(selectedDmUser.id)] || 0) > 0)
@@ -187,9 +194,11 @@ async function syncReadState(fallback, force = false) {
         method: "POST",
         body: JSON.stringify({ kind: "dm", partner_id: selectedDmUser.id }),
       });
+      markedRead = true;
     }
     if (epoch !== readSyncEpoch || !summary) return;
     applyUnread(summary);
+    if (markedRead) closeAppNotifications();
   } catch (error) {
     if (epoch === readSyncEpoch && error.status === 401) showLogin();
   }
@@ -335,6 +344,84 @@ function showProfileError(message) {
   const profileError = document.querySelector("#profileError");
   profileError.textContent = message || "";
   profileError.hidden = !message;
+}
+
+const AVATAR_MAX_BYTES = 256 * 1024;
+const AVATAR_MAX_EDGE = 512;
+
+function bustAvatarUrl(url) {
+  if (!url) return null;
+  const base = url.split("?")[0];
+  return `${base}?v=${Date.now()}`;
+}
+
+async function prepareAvatarUpload(file) {
+  if (!file || !file.type.startsWith("image/")) {
+    throw new Error("Use a JPEG, PNG, or WebP image.");
+  }
+  if (file.size <= AVATAR_MAX_BYTES && file.type !== "image/heic" && file.type !== "image/heif") {
+    return file;
+  }
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    throw new Error("Could not read that image. Try a JPEG, PNG, or WebP under 256 KB.");
+  }
+  const scale = Math.min(1, AVATAR_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    bitmap.close?.();
+    throw new Error("Could not prepare that photo.");
+  }
+  context.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close?.();
+  for (const quality of [0.86, 0.72, 0.58, 0.44, 0.32]) {
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
+    if (blob && blob.size <= AVATAR_MAX_BYTES) {
+      return new File([blob], "avatar.jpg", { type: "image/jpeg", lastModified: Date.now() });
+    }
+  }
+  throw new Error("That photo is still too large after resizing. Try a smaller image.");
+}
+
+async function uploadAvatarFile(file, retryCsrf = true) {
+  if (!csrfToken) {
+    const sessionData = await api("/api/session");
+    csrfToken = sessionData.csrf_token;
+  }
+  const body = new FormData();
+  body.append("avatar", file);
+  const response = await fetch("/api/profile/avatar", {
+    method: "POST",
+    headers: { Accept: "application/json", "X-CSRF-Token": csrfToken },
+    body,
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => ({}));
+  if (
+    response.status === 400
+    && retryCsrf
+    && data.error === "The request expired. Refresh and try again."
+  ) {
+    const sessionData = await api("/api/session");
+    csrfToken = sessionData.csrf_token;
+    return uploadAvatarFile(file, false);
+  }
+  if (!response.ok) {
+    const error = new Error(data.error || "Could not upload that photo.");
+    error.status = response.status;
+    throw error;
+  }
+  if (data.csrf_token) csrfToken = data.csrf_token;
+  if (data.user?.avatar_url) data.user.avatar_url = bustAvatarUrl(data.user.avatar_url);
+  return data;
 }
 
 function refreshProfileSettings() {
@@ -784,16 +871,13 @@ function renderDmSearchResults(people, query) {
   if (!people.length) {
     const empty = document.createElement("p");
     empty.className = "dm-search-empty";
-    empty.textContent = `No one matched “${query}”. Try an animal or display name.`;
+    empty.textContent = `No one matched “${query}”. Try a display name, or an animal name if they haven’t set one.`;
     results.append(empty);
     return;
   }
   for (const person of people) {
-    const detail = person.display_name
-      ? `Animal ${person.animal_username}`
-      : "Start a conversation";
     results.append(createDmPersonButton(person, {
-      preview: detail,
+      preview: "Start a conversation",
       active: selectedDmUser?.id === person.id,
       onClick: () => {
         document.querySelector("#dmSearchInput").value = "";
@@ -1451,21 +1535,9 @@ document.querySelector("#avatarInput").addEventListener("change", async event =>
   event.target.value = "";
   if (!file) return;
   showProfileError("");
-  const body = new FormData();
-  body.append("avatar", file);
   try {
-    const response = await fetch("/api/profile/avatar", {
-      method: "POST",
-      headers: { "X-CSRF-Token": csrfToken },
-      body,
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const error = new Error(data.error || "Could not upload that photo.");
-      error.status = response.status;
-      throw error;
-    }
-    if (data.csrf_token) csrfToken = data.csrf_token;
+    const prepared = await prepareAvatarUpload(file);
+    const data = await uploadAvatarFile(prepared);
     applyCurrentUser(data.user);
   } catch (error) {
     showProfileError(error.message);
@@ -1611,6 +1683,8 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", event => {
     if (!currentUser || !event.data) return;
     if (event.data.type === "unread-refresh") {
+      if (event.data.unread) applyUnread(event.data.unread);
+      if (event.data.source === "read-sync") closeAppNotifications();
       loadMessages();
       if (activeView === "dms") {
         loadDmContacts();
