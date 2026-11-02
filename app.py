@@ -1159,6 +1159,20 @@ def create_app(test_config=None):
         database.commit()
         return jsonify(unread_payload(database, g.account["id"]))
 
+    def serialize_dm_person(row, last_message=None, last_message_at=None):
+        public = public_name_from(row["username"], row["display_name"])
+        payload = {
+            "id": row["id"],
+            "username": public,
+            "animal_username": row["username"],
+            "display_name": row["display_name"],
+            "avatar_url": avatar_url_for(row["id"], row["avatar_ext"]),
+        }
+        if last_message is not None or last_message_at is not None:
+            payload["last_message"] = last_message
+            payload["last_message_at"] = last_message_at
+        return payload
+
     @app.get("/api/dms")
     @login_required
     def api_dm_contacts():
@@ -1167,7 +1181,7 @@ def create_app(test_config=None):
             SELECT a.id, a.username, a.display_name, a.avatar_ext,
                    d.body AS last_message, d.created_at AS last_message_at
             FROM accounts AS a
-            LEFT JOIN direct_messages AS d ON d.id = (
+            JOIN direct_messages AS d ON d.id = (
                 SELECT latest.id
                 FROM direct_messages AS latest
                 WHERE (latest.sender_id = ? AND latest.recipient_id = a.id)
@@ -1176,25 +1190,51 @@ def create_app(test_config=None):
                 LIMIT 1
             )
             WHERE a.id != ?
-            ORDER BY CASE WHEN d.id IS NULL THEN 1 ELSE 0 END,
-                     d.id DESC,
+            ORDER BY d.id DESC,
                      COALESCE(a.display_name, a.username) COLLATE NOCASE
             """,
             (g.account["id"], g.account["id"], g.account["id"]),
         ).fetchall()
-        contacts = []
-        for row in rows:
-            public = public_name_from(row["username"], row["display_name"])
-            contacts.append({
-                "id": row["id"],
-                "username": public,
-                "animal_username": row["username"],
-                "display_name": row["display_name"],
-                "avatar_url": avatar_url_for(row["id"], row["avatar_ext"]),
-                "last_message": row["last_message"],
-                "last_message_at": row["last_message_at"],
-            })
-        return jsonify(contacts=contacts)
+        return jsonify(contacts=[
+            serialize_dm_person(row, row["last_message"], row["last_message_at"])
+            for row in rows
+        ])
+
+    @app.get("/api/dms/search")
+    @login_required
+    def api_dm_search():
+        query = request.args.get("q", "")
+        if not isinstance(query, str):
+            return jsonify(error="Search must be text."), 400
+        query = query.strip()
+        if not query:
+            return jsonify(results=[])
+        if len(query) > MAX_DISPLAY_NAME_LENGTH:
+            return jsonify(error="Search is too long."), 400
+        escaped = (
+            query.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = f"%{escaped}%"
+        rows = get_db().execute(
+            """
+            SELECT id, username, display_name, avatar_ext
+            FROM accounts
+            WHERE id != ?
+              AND (
+                username LIKE ? ESCAPE '\\' COLLATE NOCASE
+                OR (
+                    display_name IS NOT NULL
+                    AND display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                )
+              )
+            ORDER BY COALESCE(display_name, username) COLLATE NOCASE
+            LIMIT 20
+            """,
+            (g.account["id"], pattern, pattern),
+        ).fetchall()
+        return jsonify(results=[serialize_dm_person(row) for row in rows])
 
     @app.get("/api/dms/<int:account_id>")
     @login_required

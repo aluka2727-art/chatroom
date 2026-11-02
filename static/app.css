@@ -246,6 +246,19 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .dm-list-copy h3 { margin: 0; font: 600 14px "Space Grotesk", sans-serif; }
 .dm-list-copy p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
 .dm-sidebar .admin-refresh { flex: 0 0 auto; }
+.dm-search { display: grid; gap: 6px; padding: 0 4px 10px; }
+.dm-search .field-label { margin: 0; }
+.dm-search-hint { margin: 0; color: var(--faint); font-size: 10px; line-height: 1.4; }
+.dm-search-results {
+  display: grid;
+  gap: 0;
+  margin: 0 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.dm-search-empty { padding: 10px 12px; color: var(--faint); font-size: 11px; line-height: 1.45; }
 .dm-contacts { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); scrollbar-color: var(--scrollbar) transparent; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
 .dm-contact {
   position: relative;

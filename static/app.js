@@ -21,6 +21,7 @@ const VERSION_NOTES = {
   "1.11.0": [
     "Set a custom display name and profile photo in Settings — they show in DMs only.",
     "World Chat stays anonymous with your animal username.",
+    "DMs only list people you’ve already texted; search a username to start a new chat.",
     "Sign in with either your animal username or your display name.",
     "Searchable emoji picker in chat and DMs.",
     "Stronger free message filtering for swearing, insults, and common evasions.",
@@ -719,43 +720,110 @@ function showDmError(message) {
   dmError.hidden = !message;
 }
 
+function createDmPersonButton(person, { preview = "", active = false, onClick }) {
+  const button = document.createElement("button");
+  button.className = "dm-contact";
+  button.type = "button";
+  button.classList.toggle("active", active);
+  button.dataset.accountId = String(person.id);
+  button.setAttribute("aria-pressed", String(active));
+  const avatar = document.createElement("div");
+  avatar.className = "dm-contact-avatar message-avatar";
+  avatar.setAttribute("aria-hidden", "true");
+  fillAvatarElement(avatar, person);
+  const copy = document.createElement("span");
+  copy.className = "dm-contact-copy";
+  const name = document.createElement("span");
+  name.className = "dm-contact-name";
+  name.textContent = person.username;
+  const previewEl = document.createElement("span");
+  previewEl.className = "dm-contact-preview";
+  previewEl.textContent = preview || person.animal_username || "Start a conversation";
+  copy.append(name, previewEl);
+  const dot = document.createElement("span");
+  dot.className = "unread-dot";
+  dot.setAttribute("aria-hidden", "true");
+  button.append(avatar, copy, dot);
+  button.addEventListener("click", onClick);
+  return button;
+}
+
 function renderDmContacts(contacts) {
   dmContacts.replaceChildren();
   if (!contacts.length) {
     const empty = document.createElement("p");
     empty.className = "dm-contact-empty";
-    empty.textContent = "There are no other room members yet.";
+    empty.textContent = "No conversations yet. Search for a username above to start one.";
     dmContacts.append(empty);
     return;
   }
   for (const contact of contacts) {
-    const button = document.createElement("button");
-    button.className = "dm-contact";
-    button.type = "button";
-    button.classList.toggle("active", selectedDmUser?.id === contact.id);
-    button.dataset.accountId = String(contact.id);
-    button.setAttribute("aria-pressed", String(selectedDmUser?.id === contact.id));
-    const avatar = document.createElement("div");
-    avatar.className = "dm-contact-avatar message-avatar";
-    avatar.setAttribute("aria-hidden", "true");
-    fillAvatarElement(avatar, contact);
-    const copy = document.createElement("span");
-    copy.className = "dm-contact-copy";
-    const name = document.createElement("span");
-    name.className = "dm-contact-name";
-    name.textContent = contact.username;
-    const preview = document.createElement("span");
-    preview.className = "dm-contact-preview";
-    preview.textContent = contact.last_message || "Start a conversation";
-    copy.append(name, preview);
-    const dot = document.createElement("span");
-    dot.className = "unread-dot";
-    dot.setAttribute("aria-hidden", "true");
-    button.append(avatar, copy, dot);
-    button.addEventListener("click", () => selectDmContact(contact));
-    dmContacts.append(button);
+    dmContacts.append(createDmPersonButton(contact, {
+      preview: contact.last_message || "Conversation",
+      active: selectedDmUser?.id === contact.id,
+      onClick: () => selectDmContact(contact),
+    }));
   }
   updateDmUnreadDots();
+}
+
+function clearDmSearchResults() {
+  const results = document.querySelector("#dmSearchResults");
+  results.hidden = true;
+  results.replaceChildren();
+}
+
+function renderDmSearchResults(people, query) {
+  const results = document.querySelector("#dmSearchResults");
+  results.replaceChildren();
+  if (!query) {
+    results.hidden = true;
+    return;
+  }
+  results.hidden = false;
+  if (!people.length) {
+    const empty = document.createElement("p");
+    empty.className = "dm-search-empty";
+    empty.textContent = `No one matched “${query}”. Try an animal or display name.`;
+    results.append(empty);
+    return;
+  }
+  for (const person of people) {
+    const detail = person.display_name
+      ? `Animal ${person.animal_username}`
+      : "Start a conversation";
+    results.append(createDmPersonButton(person, {
+      preview: detail,
+      active: selectedDmUser?.id === person.id,
+      onClick: () => {
+        document.querySelector("#dmSearchInput").value = "";
+        clearDmSearchResults();
+        selectDmContact(person);
+      },
+    }));
+  }
+}
+
+let dmSearchTimer = 0;
+async function searchDmPeople(query) {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    clearDmSearchResults();
+    return;
+  }
+  try {
+    const data = await api(`/api/dms/search?q=${encodeURIComponent(trimmed)}`);
+    renderDmSearchResults(data.results || [], trimmed);
+    showDmError("");
+  } catch (error) {
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      showDmError(error.message);
+    }
+  }
 }
 
 async function loadDmContacts() {
@@ -817,7 +885,7 @@ function resetDmConversationPane() {
   empty.textContent = "Your private conversations will appear here.";
   dmFeed.append(empty);
   document.querySelector("#dmConversationTitle").textContent = "Choose someone to message";
-  document.querySelector("#dmConversationSubtitle").textContent = "Select a room member to start a private conversation.";
+  document.querySelector("#dmConversationSubtitle").textContent = "Search for a username or open an existing conversation.";
   dmMessageInput.value = "";
   dmMessageInput.disabled = true;
   dmMessageInput.style.height = "34px";
@@ -825,6 +893,7 @@ function resetDmConversationPane() {
   dmSendButton.disabled = true;
   dmMessageError.hidden = true;
   syncDmEmojiButtons();
+  clearDmSearchResults();
   showDmContactsPage();
 }
 
@@ -1442,6 +1511,16 @@ document.querySelector("#dmRefresh").addEventListener("click", () => {
   dmContactsSnapshot = "";
   loadDmContacts();
   loadDmMessages();
+});
+document.querySelector("#dmSearchForm").addEventListener("submit", event => {
+  event.preventDefault();
+  clearTimeout(dmSearchTimer);
+  searchDmPeople(document.querySelector("#dmSearchInput").value);
+});
+document.querySelector("#dmSearchInput").addEventListener("input", event => {
+  clearTimeout(dmSearchTimer);
+  const value = event.target.value;
+  dmSearchTimer = window.setTimeout(() => searchDmPeople(value), 200);
 });
 warningAction.addEventListener("click", async () => {
   const kind = warningKind;

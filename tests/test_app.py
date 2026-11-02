@@ -42,6 +42,7 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"id=\"settingsPanel\"", page.data)
         self.assertIn(b"id=\"displayNameInput\"", page.data)
         self.assertIn(b"id=\"avatarInput\"", page.data)
+        self.assertIn(b"id=\"dmSearchInput\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
         self.assertIn(b"id=\"themeToggle\"", page.data)
         self.assertIn(b"APP_VERSION = \"1.11.0\"", script.data)
@@ -252,9 +253,13 @@ class ChatroomTests(unittest.TestCase):
         self.assertEqual(third_client.get(f"/api/dms/{first_user['id']}").json["messages"], [])
 
         contacts = self.client.get("/api/dms").json["contacts"]
-        second_contact = next(contact for contact in contacts if contact["id"] == second_user["id"])
-        self.assertEqual(second_contact["last_message"], "A private hello")
-        self.assertNotIn(first_user["id"], [contact["id"] for contact in contacts])
+        self.assertEqual([contact["id"] for contact in contacts], [second_user["id"]])
+        self.assertEqual(contacts[0]["last_message"], "A private hello")
+        self.assertNotIn(third_user["id"], [contact["id"] for contact in contacts])
+
+        search = self.client.get(f"/api/dms/search?q={third_user['username'][:3]}")
+        self.assertEqual(search.status_code, 200)
+        self.assertIn(third_user["id"], [item["id"] for item in search.json["results"]])
 
         reply = second_client.post(
             f"/api/dms/{first_user['id']}",

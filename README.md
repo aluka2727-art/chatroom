@@ -6,7 +6,7 @@ Browser-local profiles from the earlier static demo are not imported. Create the
 
 The app has a 100-account limit. `Cricket` is reserved for the initial admin account. Admin accounts cannot be deleted through the app or the member-delete command.
 
-The **DMS** side tab lets signed-in users start private conversations with other active accounts. Direct messages are visible only to their sender and recipient and are removed if either account is deleted. Select **Reply** on a DM to quote it in that conversation.
+The **DMS** side tab lists only people you’ve already messaged. Search by animal or display name to start a new private conversation. Direct messages are visible only to their sender and recipient and are removed if either account is deleted. Select **Reply** on a DM to quote it in that conversation.
 
 In **SETTINGS**, set an optional display name and profile photo. Those show in **DMs** only; World Chat stays anonymous with your animal username. Sign in with either your animal username or your display name (plus password). Photos must be JPEG, PNG, or WebP and 256 KB or smaller.
 

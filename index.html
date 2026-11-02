@@ -132,11 +132,17 @@
               <div class="dm-sidebar" id="dmSidebar">
                 <header class="dm-list-heading">
                   <div class="dm-list-copy">
-                    <h3>Contacts</h3>
-                    <p>Choose someone to message</p>
+                    <h3>Messages</h3>
+                    <p>People you’ve already texted</p>
                   </div>
                   <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
                 </header>
+                <form class="dm-search" id="dmSearchForm" role="search">
+                  <label class="field-label" for="dmSearchInput">Start a conversation</label>
+                  <input class="auth-input" id="dmSearchInput" type="search" maxlength="24" placeholder="Search animal or display name" autocomplete="off" aria-label="Search for someone to message">
+                  <p class="dm-search-hint">Search a username to message someone new.</p>
+                </form>
+                <div class="dm-search-results" id="dmSearchResults" hidden></div>
                 <nav class="dm-contacts" id="dmContacts" aria-label="Conversations"></nav>
               </div>
               <section class="dm-conversation" id="dmConversation" aria-label="Selected conversation" hidden>
@@ -144,7 +150,7 @@
                   <button class="dm-back" id="dmBackButton" type="button" aria-label="Back to contacts">←</button>
                   <div class="dm-conversation-copy">
                     <h3 id="dmConversationTitle">Choose someone to message</h3>
-                    <p id="dmConversationSubtitle">Select a room member to start a private conversation.</p>
+                    <p id="dmConversationSubtitle">Search for a username or open an existing conversation.</p>
                   </div>
                 </header>
                 <section class="feed dm-feed" id="dmFeed" aria-label="Direct messages" aria-live="polite">
