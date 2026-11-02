@@ -309,30 +309,37 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .composer textarea { width: 100%; min-height: 34px; max-height: 110px; resize: none; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 13px; line-height: 1.5; }
 .composer textarea::placeholder { color: var(--faint); }
 .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.emoji-bar {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  min-width: 0;
-  flex: 1;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-}
-.emoji-bar::-webkit-scrollbar { display: none; }
+.emoji-picker-wrap { position: relative; }
 .emoji-button, .send-button { border: 0; cursor: pointer; }
 .emoji-button {
-  flex: 0 0 auto;
+  display: grid;
   width: 30px;
   height: 30px;
+  place-items: center;
   border-radius: 4px;
   background: transparent;
-  color: var(--faint);
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1;
 }
 .emoji-button:hover:not(:disabled) { background: var(--quote); color: var(--ink); }
 .emoji-button:disabled { cursor: default; opacity: .42; }
+.emoji-picker {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(6, 36px);
+  gap: 2px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: 0 6px 20px #2c44351a;
+}
+.emoji-picker[hidden] { display: none; }
+.emoji-picker button { display: grid; width: 36px; height: 36px; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; font-size: 20px; cursor: pointer; }
+.emoji-picker button:hover, .emoji-picker button:focus-visible { background: var(--quote); outline: 0; }
 .send-button { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 4px; background: var(--green); color: var(--on-green); font-size: 11px; font-weight: 600; }
 .send-button:hover:not(:disabled) { background: var(--green-deep); }
 .send-button:disabled { cursor: default; opacity: .42; }

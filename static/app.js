@@ -1523,13 +1523,38 @@ function insertEmoji(input, emoji) {
   input.focus();
 }
 
-document.querySelectorAll(".emoji-bar").forEach(bar => {
-  bar.addEventListener("click", event => {
-    const button = event.target.closest(".emoji-button");
-    if (!button || button.disabled) return;
-    const form = bar.closest("form");
-    const input = form?.querySelector("textarea");
-    insertEmoji(input, button.dataset.emoji || button.textContent.trim());
+const emojiPickerWraps = document.querySelectorAll(".emoji-picker-wrap");
+emojiPickerWraps.forEach(wrap => {
+  const toggle = wrap.querySelector(".emoji-button");
+  const picker = wrap.querySelector(".emoji-picker");
+  toggle.addEventListener("click", () => {
+    const expanded = toggle.getAttribute("aria-expanded") === "true";
+    toggle.setAttribute("aria-expanded", String(!expanded));
+    picker.hidden = expanded;
+  });
+  picker.addEventListener("click", event => {
+    const selectedButton = event.target.closest("button");
+    if (!selectedButton) return;
+    insertEmoji(wrap.closest("form")?.querySelector("textarea"), selectedButton.textContent.trim());
+    picker.hidden = true;
+    toggle.setAttribute("aria-expanded", "false");
+  });
+});
+document.addEventListener("click", event => {
+  emojiPickerWraps.forEach(wrap => {
+    if (wrap.contains(event.target)) return;
+    wrap.querySelector(".emoji-picker").hidden = true;
+    wrap.querySelector(".emoji-button").setAttribute("aria-expanded", "false");
+  });
+});
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  emojiPickerWraps.forEach(wrap => {
+    const toggle = wrap.querySelector(".emoji-button");
+    if (toggle.getAttribute("aria-expanded") !== "true") return;
+    wrap.querySelector(".emoji-picker").hidden = true;
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.focus();
   });
 });
 

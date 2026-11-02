@@ -109,18 +109,21 @@
                 <p class="composer-error" id="messageError" role="alert" hidden></p>
                 <textarea id="messageInput" maxlength="500" rows="1" placeholder="Message the room..." aria-label="Write a message"></textarea>
                 <div class="composer-bottom">
-                  <div class="emoji-bar" role="group" aria-label="Emojis">
-                    <button class="emoji-button" type="button" data-emoji="😀" title="Grin" aria-label="Add grin">😀</button>
-                    <button class="emoji-button" type="button" data-emoji="😂" title="Laugh" aria-label="Add laugh">😂</button>
-                    <button class="emoji-button" type="button" data-emoji="😍" title="Heart eyes" aria-label="Add heart eyes">😍</button>
-                    <button class="emoji-button" type="button" data-emoji="😎" title="Cool" aria-label="Add cool">😎</button>
-                    <button class="emoji-button" type="button" data-emoji="😢" title="Sad" aria-label="Add sad">😢</button>
-                    <button class="emoji-button" type="button" data-emoji="😮" title="Surprised" aria-label="Add surprised">😮</button>
-                    <button class="emoji-button" type="button" data-emoji="👍" title="Thumbs up" aria-label="Add thumbs up">👍</button>
-                    <button class="emoji-button" type="button" data-emoji="👎" title="Thumbs down" aria-label="Add thumbs down">👎</button>
-                    <button class="emoji-button" type="button" data-emoji="❤️" title="Heart" aria-label="Add heart">❤️</button>
-                    <button class="emoji-button" type="button" data-emoji="🔥" title="Fire" aria-label="Add fire">🔥</button>
-                    <button class="emoji-button" type="button" data-emoji="🎉" title="Party" aria-label="Add party">🎉</button>
+                  <div class="emoji-picker-wrap">
+                    <button class="emoji-button" type="button" title="Choose an emoji" aria-label="Choose an emoji" aria-expanded="false" aria-controls="chatEmojiPicker">😊</button>
+                    <div class="emoji-picker" id="chatEmojiPicker" role="group" aria-label="Choose an emoji" hidden>
+                      <button type="button" aria-label="Grinning face">😀</button>
+                      <button type="button" aria-label="Face with tears of joy">😂</button>
+                      <button type="button" aria-label="Smiling face with heart-eyes">😍</button>
+                      <button type="button" aria-label="Smiling face with sunglasses">😎</button>
+                      <button type="button" aria-label="Crying face">😢</button>
+                      <button type="button" aria-label="Surprised face">😮</button>
+                      <button type="button" aria-label="Thumbs up">👍</button>
+                      <button type="button" aria-label="Thumbs down">👎</button>
+                      <button type="button" aria-label="Red heart">❤️</button>
+                      <button type="button" aria-label="Fire">🔥</button>
+                      <button type="button" aria-label="Party popper">🎉</button>
+                    </div>
                   </div>
                   <button class="send-button" id="sendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
                 </div>
@@ -163,18 +166,21 @@
                     <p class="composer-error" id="dmMessageError" role="alert" hidden></p>
                     <textarea id="dmMessageInput" maxlength="500" rows="1" placeholder="Choose someone to message..." aria-label="Write a direct message" disabled></textarea>
                     <div class="composer-bottom">
-                      <div class="emoji-bar" role="group" aria-label="Emojis">
-                        <button class="emoji-button" type="button" data-emoji="😀" title="Grin" aria-label="Add grin">😀</button>
-                        <button class="emoji-button" type="button" data-emoji="😂" title="Laugh" aria-label="Add laugh">😂</button>
-                        <button class="emoji-button" type="button" data-emoji="😍" title="Heart eyes" aria-label="Add heart eyes">😍</button>
-                        <button class="emoji-button" type="button" data-emoji="😎" title="Cool" aria-label="Add cool">😎</button>
-                        <button class="emoji-button" type="button" data-emoji="😢" title="Sad" aria-label="Add sad">😢</button>
-                        <button class="emoji-button" type="button" data-emoji="😮" title="Surprised" aria-label="Add surprised">😮</button>
-                        <button class="emoji-button" type="button" data-emoji="👍" title="Thumbs up" aria-label="Add thumbs up">👍</button>
-                        <button class="emoji-button" type="button" data-emoji="👎" title="Thumbs down" aria-label="Add thumbs down">👎</button>
-                        <button class="emoji-button" type="button" data-emoji="❤️" title="Heart" aria-label="Add heart">❤️</button>
-                        <button class="emoji-button" type="button" data-emoji="🔥" title="Fire" aria-label="Add fire">🔥</button>
-                        <button class="emoji-button" type="button" data-emoji="🎉" title="Party" aria-label="Add party">🎉</button>
+                      <div class="emoji-picker-wrap">
+                        <button class="emoji-button" type="button" title="Choose an emoji" aria-label="Choose an emoji" aria-expanded="false" aria-controls="dmEmojiPicker">😊</button>
+                        <div class="emoji-picker" id="dmEmojiPicker" role="group" aria-label="Choose an emoji" hidden>
+                          <button type="button" aria-label="Grinning face">😀</button>
+                          <button type="button" aria-label="Face with tears of joy">😂</button>
+                          <button type="button" aria-label="Smiling face with heart-eyes">😍</button>
+                          <button type="button" aria-label="Smiling face with sunglasses">😎</button>
+                          <button type="button" aria-label="Crying face">😢</button>
+                          <button type="button" aria-label="Surprised face">😮</button>
+                          <button type="button" aria-label="Thumbs up">👍</button>
+                          <button type="button" aria-label="Thumbs down">👎</button>
+                          <button type="button" aria-label="Red heart">❤️</button>
+                          <button type="button" aria-label="Fire">🔥</button>
+                          <button type="button" aria-label="Party popper">🎉</button>
+                        </div>
                       </div>
                       <button class="send-button" id="dmSendButton" type="submit" disabled>Send <span aria-hidden="true">↗</span></button>
                     </div>
