@@ -346,22 +346,31 @@ class ChatroomTests(unittest.TestCase):
         moderate.assert_called_once()
         self.assertEqual(moderate.call_args.args[1], "")
 
-    def test_messages_reject_profanity_without_api_key(self):
+    def test_messages_allow_casual_swearing_but_block_targeted_insults(self):
         from app import moderate_message
 
-        self.assertEqual(moderate_message("what the fuck", ""), MODERATION_REJECT_MESSAGE)
+        self.assertIsNone(moderate_message("what the fuck", ""))
+        self.assertIsNone(moderate_message("this is shit", ""))
+        self.assertIsNone(moderate_message("damn that was close", ""))
+        self.assertIsNone(moderate_message("hello everyone", ""))
         self.assertEqual(moderate_message("fucktard", ""), MODERATION_REJECT_MESSAGE)
         self.assertEqual(moderate_message("f*cktard", ""), MODERATION_REJECT_MESSAGE)
-        self.assertIsNone(moderate_message("hello everyone", ""))
+        self.assertEqual(moderate_message("you slut", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("asshole", ""), MODERATION_REJECT_MESSAGE)
         _user, token = self.create_account()
-        response = self.client.post(
+        allowed = self.client.post(
             "/api/messages",
             json={"text": "this is shit"},
             headers={"X-CSRF-Token": token},
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json["error"], MODERATION_REJECT_MESSAGE)
-        self.assertEqual(self.client.get("/api/messages").json["messages"], [])
+        self.assertEqual(allowed.status_code, 201)
+        blocked = self.client.post(
+            "/api/messages",
+            json={"text": "you bitch"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(blocked.status_code, 400)
+        self.assertEqual(blocked.json["error"], MODERATION_REJECT_MESSAGE)
 
     def test_messages_reject_slur_evasions_without_api_key(self):
         from app import moderate_message

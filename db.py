@@ -62,14 +62,53 @@ def translate_postgres(sql):
     return sql.replace("?", "%s")
 
 
+def postgres_conninfo(url):
+    """Normalize a Supabase/Postgres URL for short-lived app requests."""
+    if "sslmode=" not in url:
+        url += "&sslmode=require" if "?" in url else "?sslmode=require"
+    # Session pooler (:5432) holds a backend per client; transaction pooler
+    # (:6543) fits connect-from-Flask request traffic much better.
+    if "pooler.supabase.com:5432" in url:
+        url = url.replace("pooler.supabase.com:5432", "pooler.supabase.com:6543", 1)
+    return url
+
+
+def create_postgres_pool(url, *, min_size=1, max_size=4):
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+
+    return ConnectionPool(
+        conninfo=postgres_conninfo(url),
+        min_size=min_size,
+        max_size=max_size,
+        timeout=10,
+        max_waiting=20,
+        kwargs={
+            "row_factory": dict_row,
+            # Required for Supabase transaction pooler.
+            "prepare_threshold": None,
+            "connect_timeout": 10,
+        },
+        open=True,
+    )
+
+
 class PostgresConnection:
-    def __init__(self, url):
+    def __init__(self, url_or_connection):
         import psycopg
         from psycopg.rows import dict_row
 
-        if "sslmode=" not in url:
-            url += "&sslmode=require" if "?" in url else "?sslmode=require"
-        self.raw = psycopg.connect(url, row_factory=dict_row)
+        if isinstance(url_or_connection, str):
+            self.raw = psycopg.connect(
+                postgres_conninfo(url_or_connection),
+                row_factory=dict_row,
+                prepare_threshold=None,
+                connect_timeout=10,
+            )
+            self.pooled = False
+        else:
+            self.raw = url_or_connection
+            self.pooled = True
 
     def execute(self, sql, params=None):
         if sql.strip().upper() in {"BEGIN", "BEGIN IMMEDIATE"}:
@@ -92,7 +131,8 @@ class PostgresConnection:
         self.raw.rollback()
 
     def close(self):
-        self.raw.close()
+        if not self.pooled:
+            self.raw.close()
 
 
 POSTGRES_STATEMENTS = (

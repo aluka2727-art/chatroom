@@ -29,7 +29,7 @@ const VERSION_NOTES = {
     "DMs only list people you’ve already texted; search a username to start a new chat.",
     "Sign in with either your animal username or your display name.",
     "Searchable emoji picker in chat and DMs.",
-    "Stronger free message filtering for swearing, insults, and common evasions.",
+    "Filters sexual insults, slurs, and disrespect; casual swearing is allowed.",
   ],
 };
 const warningText = document.querySelector("#warningText");
@@ -72,6 +72,13 @@ let dmContactsSnapshot = "";
 let activeView = "chat";
 let accountCreatedTimeout;
 let pollingTimer;
+let messagesLoading = false;
+let dmContactsLoading = false;
+let dmMessagesLoading = false;
+let presenceLastSentAt = 0;
+const POLL_VISIBLE_MS = 4000;
+const POLL_HIDDEN_MS = 15000;
+const PRESENCE_MIN_INTERVAL_MS = 8000;
 let warningKind = null;
 let pendingDmPartnerId = null;
 let pushHint = "";
@@ -472,15 +479,7 @@ function showRoom(user) {
   adminTab.classList.remove("active");
   adminTab.setAttribute("aria-pressed", "false");
   updateRoomTitle("chat");
-  loadMessages();
-  clearInterval(pollingTimer);
-  pollingTimer = setInterval(() => {
-    loadMessages();
-    if (activeView === "dms") {
-      loadDmContacts();
-      loadDmMessages();
-    }
-  }, 2500);
+  startPolling();
   if (user.warning_count) {
     showWarning("message", `${user.warning_count === 1 ? "An admin deleted one of your messages" : `An admin deleted ${user.warning_count} of your messages`}. Deleted messages remain in the chat as [DELETED].`);
   } else {
@@ -737,8 +736,23 @@ function scrollToLatestMessage(behavior = "smooth", targetFeed = feed) {
   document.fonts?.ready.then(scroll);
 }
 
+function startPolling() {
+  clearInterval(pollingTimer);
+  const tick = () => {
+    loadMessages();
+    if (activeView === "dms") {
+      loadDmContacts();
+      loadDmMessages();
+    }
+  };
+  tick();
+  const interval = document.visibilityState === "visible" ? POLL_VISIBLE_MS : POLL_HIDDEN_MS;
+  pollingTimer = setInterval(tick, interval);
+}
+
 async function loadMessages() {
-  if (!currentUser) return;
+  if (!currentUser || messagesLoading) return;
+  messagesLoading = true;
   try {
     const data = await api(`/api/messages?after=${messageCursor}`);
     const messages = data.messages || [];
@@ -767,13 +781,21 @@ async function loadMessages() {
       }
     }
     await syncReadState(data.unread);
-    if (document.visibilityState === "visible") reportPresence(true);
+    if (document.visibilityState === "visible") {
+      const now = Date.now();
+      if (now - presenceLastSentAt >= PRESENCE_MIN_INTERVAL_MS) {
+        presenceLastSentAt = now;
+        reportPresence(true);
+      }
+    }
   } catch (error) {
     if (error.accountDeleted) {
       showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
     } else if (error.status === 401) {
       showLogin();
     }
+  } finally {
+    messagesLoading = false;
   }
 }
 
@@ -911,7 +933,8 @@ async function searchDmPeople(query) {
 }
 
 async function loadDmContacts() {
-  if (!currentUser) return;
+  if (!currentUser || dmContactsLoading) return;
+  dmContactsLoading = true;
   try {
     const data = await api("/api/dms");
     const contacts = data.contacts || [];
@@ -944,6 +967,8 @@ async function loadDmContacts() {
     } else {
       showDmError(error.message);
     }
+  } finally {
+    dmContactsLoading = false;
   }
 }
 
@@ -1044,8 +1069,9 @@ function addDmMessage(message) {
 }
 
 async function loadDmMessages() {
-  if (!currentUser || !selectedDmUser) return;
+  if (!currentUser || !selectedDmUser || dmMessagesLoading) return;
   const accountId = selectedDmUser.id;
+  dmMessagesLoading = true;
   try {
     const data = await api(`/api/dms/${accountId}?after=${dmMessageCursor}`);
     if (selectedDmUser?.id !== accountId) return;
@@ -1075,6 +1101,8 @@ async function loadDmMessages() {
     } else {
       showDmError(error.message);
     }
+  } finally {
+    dmMessagesLoading = false;
   }
 }
 
@@ -1700,11 +1728,13 @@ if ("serviceWorker" in navigator) {
 
 document.addEventListener("visibilitychange", () => {
   const visible = document.visibilityState === "visible";
+  if (visible) presenceLastSentAt = 0;
   reportPresence(visible);
-  if (!visible || !currentUser) return;
+  if (!currentUser) return;
+  startPolling();
+  if (!visible) return;
   closeAppNotifications();
   syncReadState(unreadState, true);
-  loadMessages();
 });
 
 window.addEventListener("pagehide", () => {

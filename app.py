@@ -1,3 +1,4 @@
+import atexit
 import base64
 import json
 import os
@@ -20,6 +21,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from db import (
     PostgresConnection,
     copy_sqlite_to_postgres,
+    create_postgres_pool,
     init_postgres,
     load_env_file,
 )
@@ -79,25 +81,35 @@ def detect_avatar_extension(payload, content_type="", filename=""):
         return "jpg" if suffix == "jpeg" else suffix
     return None
 OPENAI_MODERATION_URL = "https://api.openai.com/v1/moderations"
+OPENAI_MODERATION_MODEL = "omni-moderation-latest"
 MODERATION_REJECT_MESSAGE = "Message not allowed."
-# Free OpenAI Moderations categories.
+# Free omni-moderation categories from the OpenAI Moderation guide.
 BLOCKED_MODERATION_CATEGORIES = (
     "hate",
     "hate/threatening",
     "harassment",
     "harassment/threatening",
+    "illicit",
+    "illicit/violent",
+    "self-harm",
+    "self-harm/intent",
+    "self-harm/instructions",
     "sexual",
     "sexual/minors",
     "violence",
     "violence/graphic",
 )
-# Free Moderations misses plain swearing/insults, so block these locally.
-PROFANITY_WORDS = frozenset({
-    "asshole", "assholes", "bastard", "bastards", "bitch", "bitches", "bollocks",
-    "bullshit", "cock", "cocks", "cunt", "cunts", "damn", "damned", "dick", "dicks",
-    "fuck", "fucked", "fucker", "fuckers", "fucking", "fucktard", "fucktards",
-    "motherfucker", "motherfuckers",
-    "piss", "pissed", "shit", "shitty", "slut", "sluts", "whore", "whores",
+# Block when OpenAI is fairly confident even if `flagged` stayed false.
+MODERATION_SCORE_THRESHOLD = 0.5
+# Casual swearing (fuck/shit/damn) is allowed. Local blocks target sexual insults,
+# group slurs, ableist language, and clearly disrespectful personal attacks.
+SEXUAL_INSULT_WORDS = frozenset({
+    "cock", "cocks", "cunt", "cunts", "dick", "dicks",
+    "slut", "sluts", "whore", "whores",
+})
+DISRESPECTFUL_INSULT_WORDS = frozenset({
+    "asshole", "assholes", "bastard", "bastards", "bitch", "bitches",
+    "fucktard", "fucktards", "motherfucker", "motherfuckers",
 })
 # Short coded forms and full terms matched as whole words only (avoids "manga" etc.).
 SLUR_WORDS = frozenset({
@@ -105,11 +117,11 @@ SLUR_WORDS = frozenset({
     "nigger", "niggers", "nigg", "ngga", "nggas", "retard", "retarded", "retards",
 })
 # Stems checked after stripping separators / leetspeak ("n*gg*r", "f*cktard").
+# Do not include bare "fuck" — only slur / targeted insult compounds.
 BLOCK_COMPACT_STEMS = frozenset({
     "nigger", "niggers", "nigga", "niggah", "niggas", "niggaz", "niga",
     "ngga", "nggas", "ngas", "ngaz", "nggr", "nigg",
-    "fuck", "fucked", "fucker", "fuckers", "fucking", "fucktard", "fucktards",
-    "fck", "fcktard", "motherfucker", "motherfuckers",
+    "fucktard", "fucktards", "fcktard", "motherfucker", "motherfuckers",
     "retard", "retarded", "retards",
 })
 LEET_TRANSLATION = str.maketrans({
@@ -122,7 +134,7 @@ LEET_TRANSLATION = str.maketrans({
     "@": "a",
     "$": "s",
 })
-LOCAL_BLOCK_WORDS = PROFANITY_WORDS | SLUR_WORDS
+LOCAL_BLOCK_WORDS = SEXUAL_INSULT_WORDS | DISRESPECTFUL_INSULT_WORDS | SLUR_WORDS
 LOCAL_BLOCK_RE = re.compile(
     r"\b(?:"
     + "|".join(re.escape(word) for word in sorted(LOCAL_BLOCK_WORDS, key=len, reverse=True))
@@ -157,19 +169,41 @@ def contains_blocked_language(text):
     return any(stem in compact for stem in BLOCK_COMPACT_STEMS)
 
 
+def openai_moderation_blocks(result):
+    """Apply chatroom policy to one free Moderations API result."""
+    if not isinstance(result, dict):
+        return True
+    if result.get("flagged"):
+        return True
+    categories = result.get("categories")
+    if isinstance(categories, dict) and any(
+        categories.get(name) for name in BLOCKED_MODERATION_CATEGORIES
+    ):
+        return True
+    scores = result.get("category_scores")
+    if isinstance(scores, dict) and any(
+        float(scores.get(name) or 0) >= MODERATION_SCORE_THRESHOLD
+        for name in BLOCKED_MODERATION_CATEGORIES
+    ):
+        return True
+    return False
+
+
 def moderate_message(text, api_key):
     """Return None if allowed, an error string if content is blocked.
 
-    Always checks a free local profanity/slur list (including common evasions).
-    When api_key is set, also calls the free OpenAI Moderations API. When a key
-    is set and that request fails, raises ModerationUnavailable.
+    Always checks a free local list for slurs, sexual insults, and targeted
+    disrespect (casual swearing alone is allowed). When api_key is set, also
+    calls the free OpenAI Moderations API (`omni-moderation-latest` via
+    /v1/moderations). When a key is set and that request fails, raises
+    ModerationUnavailable.
     """
     if contains_blocked_language(text):
         return MODERATION_REJECT_MESSAGE
     if not api_key:
         return None
     payload = json.dumps({
-        "model": "omni-moderation-latest",
+        "model": OPENAI_MODERATION_MODEL,
         "input": text,
     }).encode("utf-8")
     request_obj = urllib.request.Request(
@@ -183,7 +217,7 @@ def moderate_message(text, api_key):
     )
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     try:
-        with urllib.request.urlopen(request_obj, timeout=5, context=ssl_context) as response:
+        with urllib.request.urlopen(request_obj, timeout=10, context=ssl_context) as response:
             body = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
         raise ModerationUnavailable from exc
@@ -193,10 +227,9 @@ def moderate_message(text, api_key):
     result = results[0]
     if not isinstance(result, dict):
         raise ModerationUnavailable
-    categories = result.get("categories")
-    if not isinstance(categories, dict):
+    if "categories" in result and not isinstance(result.get("categories"), dict):
         raise ModerationUnavailable
-    if result.get("flagged") or any(categories.get(name) for name in BLOCKED_MODERATION_CATEGORIES):
+    if openai_moderation_blocks(result):
         return MODERATION_REJECT_MESSAGE
     return None
 
@@ -288,6 +321,11 @@ def create_app(test_config=None):
     else:
         app.config["USE_SUPABASE"] = supabase_url.startswith("postgres")
 
+    if app.config["USE_SUPABASE"]:
+        postgres_pool = create_postgres_pool(app.config["SUPABASE_DB_URL"])
+        app.extensions["postgres_pool"] = postgres_pool
+        atexit.register(postgres_pool.close)
+
     def data_directory():
         if app.config["USE_SUPABASE"]:
             path = Path(project_dir / "data")
@@ -315,7 +353,8 @@ def create_app(test_config=None):
     def get_db():
         if "db" not in g:
             if app.config["USE_SUPABASE"]:
-                g.db = PostgresConnection(app.config["SUPABASE_DB_URL"])
+                pool = app.extensions["postgres_pool"]
+                g.db = PostgresConnection(pool.getconn())
             else:
                 database_path = Path(app.config["DATABASE"])
                 database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -329,8 +368,24 @@ def create_app(test_config=None):
     @app.teardown_appcontext
     def close_db(_error=None):
         connection = g.pop("db", None)
-        if connection is not None:
-            connection.close()
+        if connection is None:
+            return
+        if app.config["USE_SUPABASE"] and getattr(connection, "pooled", False):
+            pool = app.extensions.get("postgres_pool")
+            raw = connection.raw
+            try:
+                raw.rollback()
+            except Exception:
+                try:
+                    raw.close()
+                except Exception:
+                    pass
+            if pool is not None:
+                pool.putconn(raw)
+            elif not raw.closed:
+                raw.close()
+            return
+        connection.close()
 
     def seed_reads_for_account(database, account_id):
         if database.execute(
