@@ -454,6 +454,7 @@ def create_app(test_config=None):
                 body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500),
                 is_deleted INTEGER NOT NULL DEFAULT 0,
                 reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+                edited_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
             CREATE INDEX IF NOT EXISTS messages_id_idx ON messages(id);
@@ -463,6 +464,7 @@ def create_app(test_config=None):
                 recipient_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
                 body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500),
                 reply_to_id INTEGER REFERENCES direct_messages(id) ON DELETE SET NULL,
+                edited_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
             CREATE INDEX IF NOT EXISTS direct_messages_sender_idx
@@ -559,6 +561,8 @@ def create_app(test_config=None):
             database.execute(
                 "ALTER TABLE messages ADD COLUMN reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL"
             )
+        if "edited_at" not in message_columns:
+            database.execute("ALTER TABLE messages ADD COLUMN edited_at TEXT")
         direct_message_columns = {
             row["name"] for row in database.execute("PRAGMA table_info(direct_messages)")
         }
@@ -566,6 +570,8 @@ def create_app(test_config=None):
             database.execute(
                 "ALTER TABLE direct_messages ADD COLUMN reply_to_id INTEGER REFERENCES direct_messages(id) ON DELETE SET NULL"
             )
+        if "edited_at" not in direct_message_columns:
+            database.execute("ALTER TABLE direct_messages ADD COLUMN edited_at TEXT")
         database.executescript(
             """
             CREATE TRIGGER IF NOT EXISTS messages_insert_event
@@ -1096,6 +1102,7 @@ def create_app(test_config=None):
                 SELECT m.id,
                        CASE WHEN m.is_deleted = 1 OR a.id IS NULL THEN '[DELETED]' ELSE m.body END AS body,
                        m.created_at,
+                       m.edited_at,
                        a.id AS author_id,
                        a.username AS animal_username,
                        a.display_name AS author_display_name,
@@ -1130,6 +1137,7 @@ def create_app(test_config=None):
                     SELECT m.id,
                            CASE WHEN m.is_deleted = 1 OR a.id IS NULL THEN '[DELETED]' ELSE m.body END AS body,
                            m.created_at,
+                           m.edited_at,
                            a.id AS author_id,
                            a.username AS animal_username,
                            a.display_name AS author_display_name,
@@ -1190,6 +1198,7 @@ def create_app(test_config=None):
                 "created_at": row["created_at"],
                 "is_own": bool(row["is_own"]),
                 "is_deleted": bool(row["is_deleted"]),
+                "edited": bool(row["edited_at"]) and not bool(row["is_deleted"]),
                 "reply_to": reply_to,
             }
 
@@ -1238,6 +1247,55 @@ def create_app(test_config=None):
         database.commit()
         send_room_push(database, g.account["id"], g.account["username"], message_id)
         return jsonify(id=message_id), 201
+
+    @app.patch("/api/messages/<int:message_id>")
+    @login_required
+    def api_edit_message(message_id):
+        data = request.get_json(silent=True) or {}
+        text = data.get("text", "")
+        if not isinstance(text, str):
+            return jsonify(error="Message must be text."), 400
+        text = text.strip()
+        if not text or len(text) > MAX_MESSAGE_LENGTH:
+            return jsonify(error="Messages must be between 1 and 500 characters."), 400
+        try:
+            moderation_error = moderate_message(text, app.config.get("OPENAI_API_KEY", ""))
+        except ModerationUnavailable:
+            return jsonify(error="Moderation is temporarily unavailable. Try again."), 503
+        if moderation_error:
+            return jsonify(error=moderation_error), 400
+
+        database = get_db()
+        message = database.execute(
+            """
+            SELECT id, author_id, body, is_deleted
+            FROM messages
+            WHERE id = ?
+            """,
+            (message_id,),
+        ).fetchone()
+        if message is None:
+            return jsonify(error="Message not found."), 404
+        if message["is_deleted"] or message["author_id"] is None:
+            return jsonify(error="This message can no longer be edited."), 400
+        if message["author_id"] != g.account["id"]:
+            return jsonify(error="You can only edit your own messages."), 403
+        if message["body"] == text:
+            current = database.execute(
+                "SELECT edited_at FROM messages WHERE id = ?",
+                (message_id,),
+            ).fetchone()
+            return jsonify(id=message_id, edited=bool(current["edited_at"]))
+        database.execute(
+            """
+            UPDATE messages
+            SET body = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?
+            """,
+            (text, message_id),
+        )
+        database.commit()
+        return jsonify(id=message_id, edited=True)
 
     @app.post("/api/reads")
     @login_required
@@ -1388,15 +1446,24 @@ def create_app(test_config=None):
             after_id = max(0, int(request.args.get("after", "0")))
         except ValueError:
             return jsonify(error="Invalid message cursor."), 400
+        since = request.args.get("since", "")
+        if since is None:
+            since = ""
+        if not isinstance(since, str):
+            return jsonify(error="Invalid sync cursor."), 400
+        since = since.strip()
 
         database = get_db()
         if database.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
             return jsonify(error="Account not found."), 404
         parameters = (g.account["id"], account_id, account_id, g.account["id"])
+        server_time = database.execute(
+            "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS server_time"
+        ).fetchone()["server_time"]
         if after_id:
             rows = database.execute(
                 """
-                SELECT d.id, d.sender_id, d.body, d.created_at,
+                SELECT d.id, d.sender_id, d.body, d.created_at, d.edited_at,
                        a.username AS animal_username, a.display_name, a.avatar_ext,
                        replied.id AS reply_id, replied.body AS reply_body,
                        replied_author.id AS reply_author_id,
@@ -1409,17 +1476,25 @@ def create_app(test_config=None):
                 LEFT JOIN accounts AS replied_author ON replied_author.id = replied.sender_id
                 WHERE ((d.sender_id = ? AND d.recipient_id = ?)
                     OR (d.sender_id = ? AND d.recipient_id = ?))
-                  AND d.id > ?
+                  AND (
+                    d.id > ?
+                    OR (
+                      ? != ''
+                      AND d.edited_at IS NOT NULL
+                      AND d.edited_at > ?
+                      AND d.id <= ?
+                    )
+                  )
                 ORDER BY d.id ASC
                 LIMIT 100
                 """,
-                (*parameters, after_id),
+                (*parameters, after_id, since, since, after_id),
             ).fetchall()
         else:
             rows = database.execute(
                 """
                 SELECT * FROM (
-                    SELECT d.id, d.sender_id, d.body, d.created_at,
+                    SELECT d.id, d.sender_id, d.body, d.created_at, d.edited_at,
                            a.username AS animal_username, a.display_name, a.avatar_ext,
                            replied.id AS reply_id, replied.body AS reply_body,
                            replied_author.id AS reply_author_id,
@@ -1438,7 +1513,7 @@ def create_app(test_config=None):
                 """,
                 parameters,
             ).fetchall()
-        cursor = max((row["id"] for row in rows), default=after_id)
+        cursor = max((row["id"] for row in rows if row["id"] > after_id), default=after_id)
 
         def serialize_dm(row):
             author = author_fields(
@@ -1472,10 +1547,15 @@ def create_app(test_config=None):
                 "text": row["body"],
                 "created_at": row["created_at"],
                 "is_own": row["sender_id"] == g.account["id"],
+                "edited": bool(row["edited_at"]),
                 "reply_to": reply_to,
             }
 
-        return jsonify(messages=[serialize_dm(row) for row in rows], cursor=cursor)
+        return jsonify(
+            messages=[serialize_dm(row) for row in rows],
+            cursor=cursor,
+            server_time=server_time,
+        )
 
     @app.post("/api/dms/<int:account_id>")
     @login_required
@@ -1527,6 +1607,60 @@ def create_app(test_config=None):
             public_name_from(g.account["username"], mapping_get(g.account, "display_name")),
         )
         return jsonify(id=message_id), 201
+
+    @app.patch("/api/dms/<int:account_id>/messages/<int:message_id>")
+    @login_required
+    def api_edit_dm(account_id, message_id):
+        if account_id == g.account["id"]:
+            return jsonify(error="You can't send a message to yourself."), 400
+        data = request.get_json(silent=True) or {}
+        text = data.get("text", "")
+        if not isinstance(text, str):
+            return jsonify(error="Message must be text."), 400
+        text = text.strip()
+        if not text or len(text) > MAX_MESSAGE_LENGTH:
+            return jsonify(error="Messages must be between 1 and 500 characters."), 400
+        try:
+            moderation_error = moderate_message(text, app.config.get("OPENAI_API_KEY", ""))
+        except ModerationUnavailable:
+            return jsonify(error="Moderation is temporarily unavailable. Try again."), 503
+        if moderation_error:
+            return jsonify(error=moderation_error), 400
+
+        database = get_db()
+        if database.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
+            return jsonify(error="Account not found."), 404
+        message = database.execute(
+            """
+            SELECT id, sender_id, recipient_id, body
+            FROM direct_messages
+            WHERE id = ?
+            """,
+            (message_id,),
+        ).fetchone()
+        if message is None:
+            return jsonify(error="Message not found."), 404
+        partners = {message["sender_id"], message["recipient_id"]}
+        if g.account["id"] not in partners or account_id not in partners:
+            return jsonify(error="Message not found."), 404
+        if message["sender_id"] != g.account["id"]:
+            return jsonify(error="You can only edit your own messages."), 403
+        if message["body"] == text:
+            edited = database.execute(
+                "SELECT edited_at FROM direct_messages WHERE id = ?",
+                (message_id,),
+            ).fetchone()
+            return jsonify(id=message_id, edited=bool(edited["edited_at"]))
+        database.execute(
+            """
+            UPDATE direct_messages
+            SET body = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?
+            """,
+            (text, message_id),
+        )
+        database.commit()
+        return jsonify(id=message_id, edited=True)
 
     @app.patch("/api/profile")
     @login_required

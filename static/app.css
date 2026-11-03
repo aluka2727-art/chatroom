@@ -355,8 +355,77 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .message-link:hover { color: var(--green-deep); }
 .message-image-link { display: inline-block; max-width: min(100%, 280px); margin-top: 6px; vertical-align: top; }
 .message-image { display: block; width: 100%; max-height: 280px; object-fit: contain; border-radius: 6px; background: var(--hover); }
-.message-reply { margin-left: auto; padding: 2px 4px; border: 0; background: transparent; color: var(--quote-text); font: inherit; font-size: 10px; cursor: pointer; }
-.message-reply:hover { color: var(--green); text-decoration: underline; }
+.message-edited { color: var(--faint); font-size: 10px; font-style: italic; }
+.message-actions { position: relative; margin-left: auto; }
+.message-menu-button {
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--quote-text);
+  font: 700 12px "Space Grotesk", sans-serif;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  cursor: pointer;
+}
+.message-menu-button:hover,
+.message-menu-button[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+.message-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 8;
+  display: grid;
+  min-width: 112px;
+  padding: 4px;
+  border: 1px solid var(--field-border);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px #1b2a2014;
+}
+.message-menu[hidden] { display: none; }
+.message-menu-item {
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.message-menu-item:hover { background: var(--hover); color: var(--green); }
+.message-failed .message-text { color: var(--faint); }
+.message-send-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 5px 0 0;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.message-send-error-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--danger);
+  border-radius: 50%;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+}
 .reply-quote { display: grid; gap: 2px; margin: 0 0 6px; padding: 5px 8px; border-left: 2px solid var(--field-line); border-radius: 0 3px 3px 0; background: var(--quote); color: var(--quote-text); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; white-space: pre-wrap; }
 .reply-quote cite { color: var(--green); font-style: normal; font-weight: 700; }
 .composer-wrap { padding: 8px 0 10px; }

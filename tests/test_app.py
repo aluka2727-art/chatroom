@@ -33,19 +33,24 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.11.2", page.data)
+        self.assertIn(b"v1.12.0", page.data)
         self.assertIn(b"id=\"versionNotesScreen\"", page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
         self.assertIn(b"/static/app.js", page.data)
         self.assertIn(b"id=\"replyPreview\"", page.data)
+        self.assertIn(b"id=\"replyPreviewLabel\"", page.data)
         self.assertIn(b"id=\"settingsPanel\"", page.data)
         self.assertIn(b"id=\"displayNameInput\"", page.data)
         self.assertIn(b"id=\"avatarInput\"", page.data)
         self.assertIn(b"id=\"dmSearchInput\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
         self.assertIn(b"id=\"themeToggle\"", page.data)
-        self.assertIn(b"APP_VERSION = \"1.11.2\"", script.data)
+        self.assertIn(b"APP_VERSION = \"1.12.0\"", script.data)
+        self.assertIn(b"Couldn't send, inappropriate language", script.data)
+        self.assertIn(b"promotePendingMessage", script.data)
+        self.assertIn(b"createMessageActions", script.data)
+        self.assertIn(b"/api/messages/", script.data)
         self.assertIn(b"VERSION_NOTES", script.data)
         self.assertIn(b"pigin-seen-version", script.data)
         self.assertIn(b"/manifest.webmanifest", page.data)
@@ -420,6 +425,74 @@ class ChatroomTests(unittest.TestCase):
         messages = self.client.get("/api/messages").json["messages"]
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["text"], "Hello clean world")
+
+    def test_users_can_edit_own_room_and_direct_messages(self):
+        author, token = self.create_account()
+        other_client = self.app.test_client()
+        other, other_token = self.create_account(other_client)
+
+        sent = self.client.post(
+            "/api/messages",
+            json={"text": "Original room text"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(sent.status_code, 201)
+        message_id = sent.json["id"]
+        cursor = self.client.get("/api/messages").json["cursor"]
+
+        blocked = self.client.patch(
+            f"/api/messages/{message_id}",
+            json={"text": "you slut"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(blocked.status_code, 400)
+        self.assertEqual(blocked.json["error"], MODERATION_REJECT_MESSAGE)
+
+        foreign = other_client.patch(
+            f"/api/messages/{message_id}",
+            json={"text": "Hijacked"},
+            headers={"X-CSRF-Token": other_token},
+        )
+        self.assertEqual(foreign.status_code, 403)
+
+        edited = self.client.patch(
+            f"/api/messages/{message_id}",
+            json={"text": "Edited room text"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(edited.status_code, 200)
+        self.assertTrue(edited.json["edited"])
+        updates = self.client.get(f"/api/messages?after={cursor}").json["messages"]
+        updated = next(message for message in updates if message["id"] == message_id)
+        self.assertEqual(updated["text"], "Edited room text")
+        self.assertTrue(updated["edited"])
+        self.assertTrue(updated["is_own"])
+
+        dm = self.client.post(
+            f"/api/dms/{other['id']}",
+            json={"text": "Original dm text"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(dm.status_code, 201)
+        dm_id = dm.json["id"]
+        first_read = other_client.get(f"/api/dms/{author['id']}").json
+        self.assertEqual(first_read["messages"][0]["text"], "Original dm text")
+        self.assertFalse(first_read["messages"][0]["edited"])
+
+        dm_edit = self.client.patch(
+            f"/api/dms/{other['id']}/messages/{dm_id}",
+            json={"text": "Edited dm text"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(dm_edit.status_code, 200)
+        self.assertTrue(dm_edit.json["edited"])
+        synced = other_client.get(
+            f"/api/dms/{author['id']}?after={first_read['cursor']}&since={first_read['server_time']}"
+        ).json
+        self.assertEqual(len(synced["messages"]), 1)
+        self.assertEqual(synced["messages"][0]["id"], dm_id)
+        self.assertEqual(synced["messages"][0]["text"], "Edited dm text")
+        self.assertTrue(synced["messages"][0]["edited"])
 
     def test_messages_return_unavailable_when_moderation_fails(self):
         self.app.config["OPENAI_API_KEY"] = "test-key"
