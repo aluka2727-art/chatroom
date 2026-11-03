@@ -15,9 +15,13 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.11.1";
+const APP_VERSION = "1.11.2";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.11.2": [
+    "Chat should feel snappier with less lag when several people are online.",
+    "Casual swearing is allowed; sexual insults, slurs, and disrespect are still blocked.",
+  ],
   "1.11.1": [
     "Animal usernames stay private in search once you set a display name.",
     "Profile photos resize automatically so larger uploads can be saved.",
@@ -29,7 +33,7 @@ const VERSION_NOTES = {
     "DMs only list people you’ve already texted; search a username to start a new chat.",
     "Sign in with either your animal username or your display name.",
     "Searchable emoji picker in chat and DMs.",
-    "Filters sexual insults, slurs, and disrespect; casual swearing is allowed.",
+    "Stronger free message filtering for swearing, insults, and common evasions.",
   ],
 };
 const warningText = document.querySelector("#warningText");
