@@ -114,6 +114,42 @@ button, input, textarea { font: inherit; }
   background: var(--shell);
   box-shadow: 0 0 80px rgba(28, 41, 39, .05);
 }
+.app-loading {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--paper);
+}
+.loading-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: auto;
+  padding: 20px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+.loading-pigeon {
+  display: block;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  object-fit: cover;
+  filter: drop-shadow(0 5px 5px rgba(28, 41, 39, .12));
+  animation: pigeon-flight 1.15s ease-in-out infinite;
+}
+.app-loading .loading-pigeon { width: 56px; height: 56px; border-radius: 17px; }
+.app-loading .loading-indicator { margin: 0; }
+.dm-contacts > .loading-indicator { min-height: 100%; }
+@keyframes pigeon-flight {
+  0%, 100% { transform: translateY(2px) rotate(-4deg); }
+  50% { transform: translateY(-6px) rotate(4deg); }
+}
 .login-screen { min-height: 0; overflow: auto; overscroll-behavior: contain; display: grid; place-items: center; padding: 32px 0; }
 .login-panel {
   width: min(440px, 100%);
@@ -368,6 +404,12 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .admin-error { padding: 9px 11px; margin: 12px 0 0; border-left: 3px solid var(--danger); background: var(--danger-bg); color: var(--danger-ink); font-size: 11px; }
 .warning-screen { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgba(24, 34, 31, .62); }
 .warning-panel { width: min(420px, 100%); padding: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 20px 70px #101a1640; }
+.whats-new-screen { position: fixed; inset: 0; z-index: 19; display: grid; place-items: center; padding: 20px; background: rgba(24, 34, 31, .55); }
+.whats-new-panel { width: min(380px, 100%); padding: 28px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 20px 70px #101a1640; text-align: center; }
+.whats-new-mark { display: block; width: 56px; height: 56px; margin: 0 auto 12px; border-radius: 17px; object-fit: cover; animation: pigeon-flight 1.15s ease-in-out infinite; }
+.whats-new-version { margin: 0 0 5px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; }
+.whats-new-panel h2 { margin: 0; font: 600 22px "Space Grotesk", sans-serif; }
+.whats-new-panel > p:not(.whats-new-version) { margin: 9px 0 16px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .warning-mark { display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 18px; border-radius: 50%; background: var(--warn-bg); color: var(--warn-ink); font: 700 18px "Space Grotesk", sans-serif; }
 .warning-panel h2 { margin: 0; font: 600 20px "Space Grotesk", sans-serif; }
 .warning-panel p { margin: 9px 0 16px; color: var(--warn-copy); font-size: 13px; line-height: 1.55; }
@@ -456,4 +498,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   .message-avatar { width: 32px; height: 32px; }
   .message-text { font-size: 15px; }
   .composer-wrap { padding-bottom: max(8px, env(safe-area-inset-bottom)); background: var(--paper); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading-pigeon, .whats-new-mark { animation: none; }
 }

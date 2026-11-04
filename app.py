@@ -578,8 +578,8 @@ def create_app(test_config=None):
                 database,
                 account_id,
                 {
-                    "title": f"New message from {author_username}",
-                    "body": "Open PIGIN to read the chat.",
+                    "title": "World Chat",
+                    "body": f"New message from {author_username}",
                     "url": "/?view=chat",
                     "tag": "pigin-chat",
                     "badgeCount": unread_payload(database, account_id)["total"],

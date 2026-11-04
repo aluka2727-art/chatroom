@@ -4,6 +4,7 @@ const passwordInput = document.querySelector("#passwordInput");
 const confirmInput = document.querySelector("#confirmInput");
 const authError = document.querySelector("#authError");
 const loginScreen = document.querySelector("#loginScreen");
+const appLoading = document.querySelector("#appLoading");
 const room = document.querySelector("#room");
 const feed = document.querySelector("#feed");
 const messageInput = document.querySelector("#messageInput");
@@ -16,6 +17,9 @@ const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const warningText = document.querySelector("#warningText");
 const warningAction = document.querySelector("#warningAction");
+const whatsNewScreen = document.querySelector("#whatsNewScreen");
+const whatsNewDismiss = document.querySelector("#whatsNewDismiss");
+const whatsNewVersion = "1.12.2";
 const adminTab = document.querySelector("#adminTab");
 const chatTab = document.querySelector("#chatTab");
 const dmTab = document.querySelector("#dmTab");
@@ -63,6 +67,21 @@ let presenceClientMemory = "";
 let readSyncEpoch = 0;
 let displayedBadgeCount = null;
 let unreadState = { group: 0, dms: 0, total: 0, conversations: {} };
+
+function createLoadingIndicator(label) {
+  const indicator = document.createElement("div");
+  indicator.className = "loading-indicator";
+  indicator.setAttribute("role", "status");
+  const image = document.createElement("img");
+  image.className = "loading-pigeon";
+  image.src = appLoading.querySelector(".loading-pigeon").src;
+  image.alt = "";
+  const text = document.createElement("span");
+  text.className = "loading-label";
+  text.textContent = label;
+  indicator.append(image, text);
+  return indicator;
+}
 
 function presenceClientId() {
   if (presenceClientMemory) return presenceClientMemory;
@@ -308,6 +327,7 @@ function showRoom(user) {
   clearReply();
   messageError.hidden = true;
   feed.replaceChildren();
+  feed.append(createLoadingIndicator("Loading messages"));
   dmFeed.replaceChildren();
   dmContacts.replaceChildren();
   dmContactsSnapshot = "";
@@ -589,6 +609,8 @@ async function loadMessages() {
     } else if (error.status === 401) {
       showLogin();
     }
+  } finally {
+    feed.querySelector(".loading-indicator")?.remove();
   }
 }
 
@@ -606,9 +628,32 @@ async function initialize() {
       setAuthMode("create");
       updateAppBadge(0);
     }
+    if (warningScreen.hidden) showWhatsNew();
   } catch {
     authError.textContent = "Could not reach the chat server. Refresh to try again.";
     authError.hidden = false;
+  } finally {
+    appLoading.hidden = true;
+  }
+}
+
+function showWhatsNew() {
+  const seenVersionKey = "pigin-whats-new-version";
+  try {
+    if (localStorage.getItem(seenVersionKey) === whatsNewVersion) return;
+  } catch {
+    // Keep the release note available when browser storage is blocked.
+  }
+  whatsNewScreen.hidden = false;
+  whatsNewDismiss.focus();
+}
+
+function dismissWhatsNew() {
+  whatsNewScreen.hidden = true;
+  try {
+    localStorage.setItem("pigin-whats-new-version", whatsNewVersion);
+  } catch {
+    // The release note is dismissed for this visit when storage is blocked.
   }
 }
 
@@ -656,6 +701,8 @@ function renderDmContacts(contacts) {
 
 async function loadDmContacts() {
   if (!currentUser) return;
+  const showLoader = !dmContactsSnapshot;
+  if (showLoader) dmContacts.replaceChildren(createLoadingIndicator("Loading conversations"));
   try {
     const data = await api("/api/dms");
     const contacts = data.contacts || [];
@@ -688,6 +735,8 @@ async function loadDmContacts() {
     } else {
       showDmError(error.message);
     }
+  } finally {
+    if (showLoader) dmContacts.querySelector(".loading-indicator")?.remove();
   }
 }
 
@@ -790,6 +839,8 @@ function addDmMessage(message) {
 async function loadDmMessages() {
   if (!currentUser || !selectedDmUser) return;
   const accountId = selectedDmUser.id;
+  const showLoader = dmMessageCursor === 0 && !dmFeed.children.length;
+  if (showLoader) dmFeed.append(createLoadingIndicator("Loading messages"));
   try {
     const data = await api(`/api/dms/${accountId}?after=${dmMessageCursor}`);
     if (selectedDmUser?.id !== accountId) return;
@@ -818,6 +869,10 @@ async function loadDmMessages() {
       showLogin();
     } else {
       showDmError(error.message);
+    }
+  } finally {
+    if (selectedDmUser?.id === accountId && showLoader) {
+      dmFeed.querySelector(".loading-indicator")?.remove();
     }
   }
 }
@@ -1276,6 +1331,7 @@ compactMenu.addEventListener("change", event => {
 });
 updateMenuButton();
 applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
+whatsNewDismiss.addEventListener("click", dismissWhatsNew);
 window.visualViewport?.addEventListener("resize", fitAppToViewport);
 window.visualViewport?.addEventListener("scroll", () => {
   fitAppToViewport();

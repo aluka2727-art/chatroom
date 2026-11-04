@@ -32,7 +32,8 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.8.0", page.data)
+        self.assertIn(b"v1.12.2", page.data)
+        self.assertIn(b'id="whatsNewScreen"', page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
         self.assertIn(b"/static/app.js", page.data)
@@ -667,6 +668,7 @@ class ChatroomTests(unittest.TestCase):
             self.assertEqual(subscription["endpoint"], "https://push.example.test/device")
             self.assertEqual(subscription["keys"]["p256dh"], "recipient-key")
             payload = webpush.call_args.kwargs["data"]
+            self.assertIn(f"New direct message from {sender['username']}", payload)
             self.assertIn(sender["username"], payload)
             self.assertIn(f"/?view=dms&with={sender['id']}", payload)
             self.assertEqual(webpush.call_args.kwargs["vapid_claims"]["sub"], "mailto:pigin@example.com")
@@ -854,7 +856,8 @@ class ChatroomTests(unittest.TestCase):
             )
             payload = json.loads(webpush.call_args.kwargs["data"])
             self.assertEqual(payload["url"], "/?view=chat")
-            self.assertIn(sender["username"], payload["title"])
+            self.assertEqual(payload["title"], "World Chat")
+            self.assertEqual(payload["body"], f"New message from {sender['username']}")
             self.assertEqual(payload["badgeCount"], 1)
             self.assertEqual(payload["tag"], "pigin-chat")
 

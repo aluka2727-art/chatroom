@@ -24,9 +24,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='dm-pages') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='1.12.2') }}">
   <script src="{{ url_for('static', filename='emoji-data.js', v='unicode-17.0') }}" defer></script>
-  <script src="{{ url_for('static', filename='app.js', v='emoji-picker-all') }}" defer></script>
+  <script src="{{ url_for('static', filename='app.js', v='1.12.2') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -223,7 +223,22 @@
         <button class="login-submit" id="warningAction" type="button">Continue</button>
       </section>
     </div>
-    <footer class="app-footer">v1.10.0</footer>
+    <div class="whats-new-screen" id="whatsNewScreen" role="dialog" aria-modal="true" aria-labelledby="whatsNewTitle" aria-describedby="whatsNewText" hidden>
+      <section class="whats-new-panel">
+        <img class="whats-new-mark" src="{{ url_for('static', filename='icon-192.png', v='pigin-logo') }}" alt="" width="56" height="56">
+        <p class="whats-new-version">PIGIN v1.12.2</p>
+        <h2 id="whatsNewTitle">What’s new</h2>
+        <p id="whatsNewText">A little pigeon flight keeps you company while PIGIN loads—including chats, DMs, and conversations.</p>
+        <button class="login-submit" id="whatsNewDismiss" type="button">Got it</button>
+      </section>
+    </div>
+    <footer class="app-footer">v1.12.2</footer>
+  </div>
+  <div class="app-loading" id="appLoading" role="status" aria-label="Loading PIGIN">
+    <div class="loading-indicator">
+      <img class="loading-pigeon" src="{{ url_for('static', filename='icon-192.png', v='pigin-logo') }}" alt="" width="56" height="56">
+      <span class="loading-label">Loading PIGIN</span>
+    </div>
   </div>
 </body>
 </html>
