@@ -94,12 +94,19 @@ let activeView = "chat";
 let openMessageMenu = null;
 let accountCreatedTimeout;
 let pollingTimer;
+let realtimeRefreshTimer;
+let realtimeClient = null;
+let realtimeChannels = [];
+let realtimeSetupFor = null;
+let realtimeReadyTopics = new Set();
+let supabaseSdkPromise = null;
 let messagesLoading = false;
 let dmContactsLoading = false;
 let dmMessagesLoading = false;
 let presenceLastSentAt = 0;
 const POLL_VISIBLE_MS = 4000;
 const POLL_HIDDEN_MS = 15000;
+const REALTIME_SAFETY_SYNC_MS = 60000;
 const PRESENCE_MIN_INTERVAL_MS = 8000;
 let warningKind = null;
 let pendingDmPartnerId = null;
@@ -115,10 +122,9 @@ function createLoadingIndicator(label) {
   const indicator = document.createElement("div");
   indicator.className = "loading-indicator";
   indicator.setAttribute("role", "status");
-  const image = document.createElement("img");
+  const image = document.createElement("div");
   image.className = "loading-pigeon";
-  image.src = appLoading.querySelector(".loading-pigeon").src;
-  image.alt = "";
+  image.setAttribute("aria-hidden", "true");
   const text = document.createElement("span");
   text.className = "loading-label";
   text.textContent = label;
@@ -320,6 +326,12 @@ function setAuthMode(mode) {
 
 function showLogin() {
   clearInterval(pollingTimer);
+  clearInterval(realtimeRefreshTimer);
+  realtimeChannels.forEach(channel => realtimeClient?.removeChannel(channel));
+  realtimeChannels = [];
+  realtimeClient = null;
+  realtimeSetupFor = null;
+  realtimeReadyTopics = new Set();
   currentUser = null;
   messageCursor = 0;
   warningKind = null;
@@ -1004,8 +1016,76 @@ function startPolling() {
     }
   };
   tick();
-  const interval = document.visibilityState === "visible" ? POLL_VISIBLE_MS : POLL_HIDDEN_MS;
+  const interval = realtimeReadyTopics.size === 2
+    ? REALTIME_SAFETY_SYNC_MS
+    : document.visibilityState === "visible" ? POLL_VISIBLE_MS : POLL_HIDDEN_MS;
   pollingTimer = setInterval(tick, interval);
+  if (currentUser && realtimeSetupFor !== currentUser.id) setupRealtime();
+}
+
+async function setupRealtime() {
+  if (!currentUser || realtimeSetupFor === currentUser.id) return;
+  const accountId = currentUser.id;
+  realtimeSetupFor = accountId;
+  try {
+    const sessionData = await api("/api/session");
+    const config = sessionData.realtime;
+    if (!config || !currentUser || currentUser.id !== accountId) return;
+    if (!await loadSupabaseSdk()) {
+      realtimeSetupFor = null;
+      return;
+    }
+    if (!currentUser || currentUser.id !== accountId) return;
+    realtimeClient = window.supabase.createClient(config.url, config.anon_key, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+    await realtimeClient.realtime.setAuth(config.access_token);
+
+    const onRefresh = () => {
+      loadMessages();
+      if (activeView === "dms") {
+        loadDmContacts();
+        loadDmMessages();
+      }
+    };
+    const topics = ["pigin:world", `pigin:account:${accountId}`];
+    realtimeChannels = topics.map(topic => realtimeClient
+      .channel(topic, { config: { private: true } })
+      .on("broadcast", { event: "refresh" }, onRefresh)
+      .subscribe(status => {
+        if (!currentUser || currentUser.id !== accountId) return;
+        if (status === "SUBSCRIBED") realtimeReadyTopics.add(topic);
+        else realtimeReadyTopics.delete(topic);
+        startPolling();
+      }));
+
+    clearInterval(realtimeRefreshTimer);
+    realtimeRefreshTimer = setInterval(async () => {
+      try {
+        const latest = await api("/api/session");
+        if (latest.realtime?.access_token) {
+          await realtimeClient?.realtime.setAuth(latest.realtime.access_token);
+        }
+      } catch {}
+    }, 50 * 60 * 1000);
+  } catch {
+    realtimeSetupFor = null;
+  }
+}
+
+function loadSupabaseSdk() {
+  if (window.supabase?.createClient) return Promise.resolve(true);
+  if (!supabaseSdkPromise) {
+    supabaseSdkPromise = new Promise(resolve => {
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+      script.async = true;
+      script.onload = () => resolve(Boolean(window.supabase?.createClient));
+      script.onerror = () => resolve(false);
+      document.head.append(script);
+    });
+  }
+  return supabaseSdkPromise;
 }
 
 async function loadMessages() {

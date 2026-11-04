@@ -315,6 +315,99 @@ def init_postgres(connection):
     connection.commit()
 
 
+def init_postgres_realtime(connection):
+    """Install private Supabase Broadcast topics for world and account updates."""
+    statements = (
+        """
+        DO $policy$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_policies
+                WHERE schemaname = 'realtime' AND tablename = 'messages'
+                  AND policyname = 'pigin_members_receive_updates'
+            ) THEN
+                CREATE POLICY pigin_members_receive_updates
+                ON realtime.messages FOR SELECT TO authenticated
+                USING (
+                    realtime.topic() = 'pigin:world'
+                    OR realtime.topic() = 'pigin:account:' || (auth.jwt() ->> 'sub')
+                );
+            END IF;
+        END
+        $policy$
+        """,
+        """
+        CREATE OR REPLACE FUNCTION public.pigin_broadcast_world_change()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = ''
+        AS $function$
+        BEGIN
+            PERFORM realtime.send(
+                payload => jsonb_build_object('kind', 'refresh'),
+                event => 'refresh',
+                topic => 'pigin:world',
+                private => true
+            );
+            RETURN NULL;
+        END;
+        $function$
+        """,
+        "DROP TRIGGER IF EXISTS pigin_broadcast_world_change ON public.messages",
+        """
+        CREATE TRIGGER pigin_broadcast_world_change
+        AFTER INSERT OR UPDATE OR DELETE ON public.messages
+        FOR EACH ROW EXECUTE FUNCTION public.pigin_broadcast_world_change()
+        """,
+        """
+        CREATE OR REPLACE FUNCTION public.pigin_broadcast_dm_change()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = ''
+        AS $function$
+        DECLARE
+            sender_id bigint;
+            recipient_id bigint;
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                sender_id := OLD.sender_id;
+                recipient_id := OLD.recipient_id;
+            ELSE
+                sender_id := NEW.sender_id;
+                recipient_id := NEW.recipient_id;
+            END IF;
+            PERFORM realtime.send(
+                payload => jsonb_build_object('kind', 'refresh'),
+                event => 'refresh',
+                topic => 'pigin:account:' || sender_id::text,
+                private => true
+            );
+            IF recipient_id <> sender_id THEN
+                PERFORM realtime.send(
+                    payload => jsonb_build_object('kind', 'refresh'),
+                    event => 'refresh',
+                    topic => 'pigin:account:' || recipient_id::text,
+                    private => true
+                );
+            END IF;
+            RETURN NULL;
+        END;
+        $function$
+        """,
+        "DROP TRIGGER IF EXISTS pigin_broadcast_dm_change ON public.direct_messages",
+        """
+        CREATE TRIGGER pigin_broadcast_dm_change
+        AFTER INSERT OR UPDATE OR DELETE ON public.direct_messages
+        FOR EACH ROW EXECUTE FUNCTION public.pigin_broadcast_dm_change()
+        """,
+    )
+    for statement in statements:
+        connection.execute(statement)
+    connection.commit()
+
+
 def copy_sqlite_to_postgres(connection, sqlite_path):
     source = sqlite3.connect(sqlite_path)
     source.row_factory = sqlite3.Row

@@ -2,6 +2,8 @@
 
 This is a Flask chat app backed by Supabase Postgres. Accounts and messages are stored in that database and shared between visitors and devices. Without `SUPABASE_DB_URL`, the app falls back to a local SQLite file. Passwords are hashed by Werkzeug; sessions use signed, HTTP-only cookies; mutating API calls require a CSRF token. Message authors are stored by account ID, so deleting an account leaves its messages visible as `[DELETED]`, and the username can be reused safely.
 
+When Supabase Realtime is configured, private Broadcast channels signal new or edited room messages and DMs immediately. The app keeps a one-minute sync as a recovery check; it falls back to the existing polling interval if Realtime is unavailable. On first startup with Realtime configured, the app installs database triggers and an authorization policy. DM events contain no message text and each account channel is readable only by that account.
+
 Browser-local profiles from the earlier static demo are not imported. Create the server-backed Cricket account with the CLI command below, then create/sign in to any other accounts on the deployed site. Any account with the `admin` role can use the admin panel and API.
 
 The app has a 100-account limit. `Cricket` is reserved for the initial admin account. Admin accounts cannot be deleted through the app or the member-delete command.
@@ -83,6 +85,9 @@ python -m unittest discover -s tests -v
 	os.environ["CHATROOM_SECRET_KEY"] = "PASTE_YOUR_PRIVATE_RANDOM_SECRET_HERE"
 	os.environ["CHATROOM_DATABASE"] = "/home/YOURUSERNAME/chatroom/data/chatroom.sqlite3"
 	os.environ["SUPABASE_DB_URL"] = "PASTE_YOUR_SUPABASE_POSTGRES_URI_HERE"
+	os.environ["SUPABASE_REALTIME_URL"] = "https://YOUR_PROJECT_REF.supabase.co"
+	os.environ["SUPABASE_ANON_KEY"] = "PASTE_YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY_HERE"
+	os.environ["SUPABASE_JWT_SECRET"] = "PASTE_YOUR_SUPABASE_LEGACY_JWT_SECRET_HERE"
 	os.environ["OPENAI_API_KEY"] = "PASTE_YOUR_OPENAI_API_KEY_HERE"
 	os.environ["CHATROOM_COOKIE_SECURE"] = "1"
 
@@ -100,6 +105,8 @@ python -m unittest discover -s tests -v
 
 	Set a strong, unique password at the prompt. The command creates Cricket or promotes an existing Cricket profile to admin; it does not delete messages. To rename and promote the existing Reindeer account instead, back up the database and run `flask --app /home/YOURUSERNAME/chatroom/app.py promote-admin Reindeer --rename-to Viper`.
 9. Click **Reload** in the Web tab, then visit `https://YOURUSERNAME.pythonanywhere.com`.
+
+Use the project URL and publishable (or legacy anon) key from the Supabase project settings. The JWT secret is a server-only secret; never put it in HTML or client-side configuration. Keep Supabase Realtime enabled for the project. If any of the three Realtime settings are missing, the app continues using polling.
 
 10. To deploy later changes, push them to GitHub from your development machine, then update the PythonAnywhere checkout and reload the app:
 

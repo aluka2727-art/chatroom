@@ -1,5 +1,7 @@
 import atexit
 import base64
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -23,6 +25,7 @@ from db import (
     copy_sqlite_to_postgres,
     create_postgres_pool,
     init_postgres,
+    init_postgres_realtime,
     load_env_file,
 )
 
@@ -298,6 +301,9 @@ def create_app(test_config=None):
         SECRET_KEY=os.environ.get("CHATROOM_SECRET_KEY"),
         DATABASE=os.environ.get("CHATROOM_DATABASE", str(project_dir / "chatroom.sqlite3")),
         SUPABASE_DB_URL=os.environ.get("SUPABASE_DB_URL", ""),
+        SUPABASE_REALTIME_URL=os.environ.get("SUPABASE_REALTIME_URL", ""),
+        SUPABASE_ANON_KEY=os.environ.get("SUPABASE_ANON_KEY", ""),
+        SUPABASE_JWT_SECRET=os.environ.get("SUPABASE_JWT_SECRET", ""),
         USE_SUPABASE=False,
         OPENAI_API_KEY=os.environ.get("OPENAI_API_KEY", ""),
         VAPID_PUBLIC_KEY=os.environ.get("CHATROOM_VAPID_PUBLIC_KEY", ""),
@@ -325,6 +331,35 @@ def create_app(test_config=None):
         postgres_pool = create_postgres_pool(app.config["SUPABASE_DB_URL"])
         app.extensions["postgres_pool"] = postgres_pool
         atexit.register(postgres_pool.close)
+
+    def realtime_enabled():
+        return bool(
+            app.config["USE_SUPABASE"]
+            and app.config.get("SUPABASE_REALTIME_URL")
+            and app.config.get("SUPABASE_ANON_KEY")
+            and app.config.get("SUPABASE_JWT_SECRET")
+        )
+
+    def realtime_token(account_id):
+        def encode_part(value):
+            return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+        now = int(time.time())
+        header = encode_part(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+        payload = encode_part(json.dumps({
+            "aud": "authenticated",
+            "role": "authenticated",
+            "sub": str(account_id),
+            "iat": now,
+            "exp": now + 3600,
+        }, separators=(",", ":")).encode())
+        signing_input = f"{header}.{payload}"
+        signature = hmac.new(
+            app.config["SUPABASE_JWT_SECRET"].encode(),
+            signing_input.encode(),
+            hashlib.sha256,
+        ).digest()
+        return f"{signing_input}.{encode_part(signature)}"
 
     def data_directory():
         if app.config["USE_SUPABASE"]:
@@ -597,6 +632,8 @@ def create_app(test_config=None):
 
     with app.app_context():
         init_db()
+        if realtime_enabled():
+            init_postgres_realtime(get_db())
 
     def csrf_token():
         token = session.get("csrf_token")
@@ -968,6 +1005,14 @@ def create_app(test_config=None):
             ).fetchone()
         return jsonify(
             csrf_token=csrf_token(),
+            realtime=(
+                {
+                    "url": app.config["SUPABASE_REALTIME_URL"].rstrip("/"),
+                    "anon_key": app.config["SUPABASE_ANON_KEY"],
+                    "access_token": realtime_token(account["id"]),
+                }
+                if account and realtime_enabled() else None
+            ),
             account_deleted=bool(deleted),
             deleted_username=deleted["username"] if deleted else None,
             user=(
