@@ -73,7 +73,7 @@ def postgres_conninfo(url):
     return url
 
 
-def create_postgres_pool(url, *, min_size=1, max_size=4):
+def create_postgres_pool(url, *, min_size=1, max_size=12):
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool
 
@@ -81,8 +81,10 @@ def create_postgres_pool(url, *, min_size=1, max_size=4):
         conninfo=postgres_conninfo(url),
         min_size=min_size,
         max_size=max_size,
-        timeout=10,
-        max_waiting=20,
+        # Chat clients poll every few seconds. Four connections caused requests
+        # to queue behind one another as the room grew, including sign-ins.
+        timeout=5,
+        max_waiting=40,
         kwargs={
             "row_factory": dict_row,
             # Required for Supabase transaction pooler.
