@@ -831,7 +831,7 @@ def create_app(test_config=None):
             skip_foreground=False,
         )
 
-    def send_room_push(database, author_id, author_username, message_id):
+    def send_room_push(database, author_id, message_id):
         recipients = database.execute(
             "SELECT DISTINCT account_id FROM push_subscriptions WHERE account_id != ?",
             (author_id,),
@@ -846,15 +846,19 @@ def create_app(test_config=None):
                 """,
                 (account_id, max(message_id - 1, 0)),
             )
+            unread = unread_payload(database, account_id)
             deliver_push(
                 database,
                 account_id,
                 {
                     "title": "World Chat",
-                    "body": f"New message from {author_username}",
+                    "body": (
+                        f"{unread['group']} new message"
+                        f"{'s' if unread['group'] != 1 else ''} in World Chat"
+                    ),
                     "url": "/?view=chat",
                     "tag": "pigin-chat",
-                    "badgeCount": unread_payload(database, account_id)["total"],
+                    "badgeCount": unread["total"],
                 },
             )
         if recipients:
@@ -1245,7 +1249,7 @@ def create_app(test_config=None):
         )
         message_id = inserted_id(cursor)
         database.commit()
-        send_room_push(database, g.account["id"], g.account["username"], message_id)
+        send_room_push(database, g.account["id"], message_id)
         return jsonify(id=message_id), 201
 
     @app.patch("/api/messages/<int:message_id>")

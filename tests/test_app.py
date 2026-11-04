@@ -1161,7 +1161,7 @@ class ChatroomTests(unittest.TestCase):
             payload = json.loads(webpush.call_args.kwargs["data"])
             self.assertEqual(payload["url"], "/?view=chat")
             self.assertEqual(payload["title"], "World Chat")
-            self.assertEqual(payload["body"], f"New message from {sender['username']}")
+            self.assertEqual(payload["body"], "1 new message in World Chat")
             self.assertEqual(payload["badgeCount"], 1)
             self.assertEqual(payload["tag"], "pigin-chat")
 
@@ -1198,7 +1198,9 @@ class ChatroomTests(unittest.TestCase):
             self.assertEqual(webpush.call_count, 1)
             endpoint = webpush.call_args.kwargs["subscription_info"]["endpoint"]
             self.assertEqual(endpoint, "https://push.example.test/phone")
-            self.assertEqual(json.loads(webpush.call_args.kwargs["data"])["badgeCount"], 2)
+            payload = json.loads(webpush.call_args.kwargs["data"])
+            self.assertEqual(payload["body"], "2 new messages in World Chat")
+            self.assertEqual(payload["badgeCount"], 2)
 
         hidden = self.client.post(
             "/api/push/presence",
