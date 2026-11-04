@@ -1,3 +1,4 @@
+import atexit
 import base64
 import json
 import os
@@ -20,6 +21,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from db import (
     PostgresConnection,
     copy_sqlite_to_postgres,
+    create_postgres_pool,
     init_postgres,
     load_env_file,
 )
@@ -47,33 +49,80 @@ RESERVED_USERNAMES = {"Cricket", "Viper"}
 MAX_ACCOUNTS = 100
 MAX_MESSAGE_LENGTH = 500
 PRESENCE_LEASE_SECONDS = 12
+MIN_DISPLAY_NAME_LENGTH = 2
+MAX_DISPLAY_NAME_LENGTH = 24
+DISPLAY_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]{0,22}[A-Za-z0-9]$")
+AVATAR_MAX_BYTES = 256 * 1024
+AVATAR_CONTENT_TYPES = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+AVATAR_EXTENSIONS = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+}
+
+
+def detect_avatar_extension(payload, content_type="", filename=""):
+    content_type = (content_type or "").lower().split(";")[0].strip()
+    if content_type in AVATAR_CONTENT_TYPES:
+        return AVATAR_CONTENT_TYPES[content_type]
+    if payload.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        return "webp"
+    suffix = Path(filename or "").suffix.lower().lstrip(".")
+    if suffix in AVATAR_EXTENSIONS:
+        return "jpg" if suffix == "jpeg" else suffix
+    return None
 OPENAI_MODERATION_URL = "https://api.openai.com/v1/moderations"
+OPENAI_MODERATION_MODEL = "omni-moderation-latest"
 MODERATION_REJECT_MESSAGE = "Message not allowed."
-# Block identity hate plus common abuse categories from OpenAI Moderations.
+# Free omni-moderation categories from the OpenAI Moderation guide.
 BLOCKED_MODERATION_CATEGORIES = (
     "hate",
     "hate/threatening",
     "harassment",
     "harassment/threatening",
+    "illicit",
+    "illicit/violent",
+    "self-harm",
+    "self-harm/intent",
+    "self-harm/instructions",
+    "sexual",
+    "sexual/minors",
     "violence",
     "violence/graphic",
 )
-# OpenAI Moderations does not reliably flag plain swearing, so block these locally.
-PROFANITY_WORDS = frozenset({
-    "asshole", "assholes", "bastard", "bastards", "bitch", "bitches", "bollocks",
-    "bullshit", "cock", "cocks", "cunt", "cunts", "damn", "damned", "dick", "dicks",
-    "fuck", "fucked", "fucker", "fuckers", "fucking", "motherfucker", "motherfuckers",
-    "piss", "pissed", "shit", "shitty", "slut", "sluts", "whore", "whores",
+# Block when OpenAI is fairly confident even if `flagged` stayed false.
+MODERATION_SCORE_THRESHOLD = 0.5
+# Casual swearing (fuck/shit/damn) is allowed. Local blocks target sexual insults,
+# group slurs, ableist language, and clearly disrespectful personal attacks.
+SEXUAL_INSULT_WORDS = frozenset({
+    "cock", "cocks", "cunt", "cunts", "dick", "dicks",
+    "slut", "sluts", "whore", "whores",
+})
+DISRESPECTFUL_INSULT_WORDS = frozenset({
+    "asshole", "assholes", "bastard", "bastards", "bitch", "bitches",
+    "fucktard", "fucktards", "motherfucker", "motherfuckers",
 })
 # Short coded forms and full terms matched as whole words only (avoids "manga" etc.).
 SLUR_WORDS = frozenset({
     "nga", "ngas", "ngaz", "nig", "niga", "nigga", "niggah", "niggas", "niggaz",
     "nigger", "niggers", "nigg", "ngga", "nggas", "retard", "retarded", "retards",
 })
-# Longer stems checked after stripping separators / leetspeak ("n*gg*r", "n i g g e r").
-SLUR_COMPACT_STEMS = frozenset({
+# Stems checked after stripping separators / leetspeak ("n*gg*r", "f*cktard").
+# Do not include bare "fuck" — only slur / targeted insult compounds.
+BLOCK_COMPACT_STEMS = frozenset({
     "nigger", "niggers", "nigga", "niggah", "niggas", "niggaz", "niga",
     "ngga", "nggas", "ngas", "ngaz", "nggr", "nigg",
+    "fucktard", "fucktards", "fcktard", "motherfucker", "motherfuckers",
+    "retard", "retarded", "retards",
 })
 LEET_TRANSLATION = str.maketrans({
     "0": "o",
@@ -85,7 +134,7 @@ LEET_TRANSLATION = str.maketrans({
     "@": "a",
     "$": "s",
 })
-LOCAL_BLOCK_WORDS = PROFANITY_WORDS | SLUR_WORDS
+LOCAL_BLOCK_WORDS = SEXUAL_INSULT_WORDS | DISRESPECTFUL_INSULT_WORDS | SLUR_WORDS
 LOCAL_BLOCK_RE = re.compile(
     r"\b(?:"
     + "|".join(re.escape(word) for word in sorted(LOCAL_BLOCK_WORDS, key=len, reverse=True))
@@ -117,26 +166,44 @@ def contains_blocked_language(text):
     if LOCAL_BLOCK_RE.search(text):
         return True
     compact = compact_moderation_text(text)
-    return any(stem in compact for stem in SLUR_COMPACT_STEMS)
+    return any(stem in compact for stem in BLOCK_COMPACT_STEMS)
 
 
-def contains_profanity(text):
-    return contains_blocked_language(text)
+def openai_moderation_blocks(result):
+    """Apply chatroom policy to one free Moderations API result."""
+    if not isinstance(result, dict):
+        return True
+    if result.get("flagged"):
+        return True
+    categories = result.get("categories")
+    if isinstance(categories, dict) and any(
+        categories.get(name) for name in BLOCKED_MODERATION_CATEGORIES
+    ):
+        return True
+    scores = result.get("category_scores")
+    if isinstance(scores, dict) and any(
+        float(scores.get(name) or 0) >= MODERATION_SCORE_THRESHOLD
+        for name in BLOCKED_MODERATION_CATEGORIES
+    ):
+        return True
+    return False
 
 
 def moderate_message(text, api_key):
     """Return None if allowed, an error string if content is blocked.
 
-    Always checks a local profanity/slur list (including common evasions). When
-    api_key is set, also calls OpenAI Moderations. When a key is set and that
-    request fails, raises ModerationUnavailable.
+    Always checks a free local list for slurs, sexual insults, and targeted
+    disrespect (casual swearing alone is allowed). When api_key is set, also
+    calls the free OpenAI Moderations API (`omni-moderation-latest` via
+    /v1/moderations). When a key is set and that request fails, raises
+    ModerationUnavailable.
     """
     if contains_blocked_language(text):
         return MODERATION_REJECT_MESSAGE
     if not api_key:
         return None
     payload = json.dumps({
-        "model": "omni-moderation-latest",
+        "model": OPENAI_MODERATION_MODEL,
         "input": text,
     }).encode("utf-8")
     request_obj = urllib.request.Request(
@@ -150,7 +217,7 @@ def moderate_message(text, api_key):
     )
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     try:
-        with urllib.request.urlopen(request_obj, timeout=5, context=ssl_context) as response:
+        with urllib.request.urlopen(request_obj, timeout=10, context=ssl_context) as response:
             body = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
         raise ModerationUnavailable from exc
@@ -160,12 +227,68 @@ def moderate_message(text, api_key):
     result = results[0]
     if not isinstance(result, dict):
         raise ModerationUnavailable
-    categories = result.get("categories")
-    if not isinstance(categories, dict):
+    if "categories" in result and not isinstance(result.get("categories"), dict):
         raise ModerationUnavailable
-    if result.get("flagged") or any(categories.get(name) for name in BLOCKED_MODERATION_CATEGORIES):
+    if openai_moderation_blocks(result):
         return MODERATION_REJECT_MESSAGE
     return None
+
+
+def normalize_display_name(value):
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return None
+    return " ".join(value.split())
+
+
+def validate_display_name(value):
+    """Return (normalized_name_or_empty, error_message). Empty clears the name."""
+    normalized = normalize_display_name(value)
+    if normalized is None:
+        return None, "Display name must be text."
+    if not normalized:
+        return "", None
+    if not MIN_DISPLAY_NAME_LENGTH <= len(normalized) <= MAX_DISPLAY_NAME_LENGTH:
+        return None, f"Display names must be {MIN_DISPLAY_NAME_LENGTH}-{MAX_DISPLAY_NAME_LENGTH} characters."
+    if not DISPLAY_NAME_RE.fullmatch(normalized):
+        return None, "Use letters, numbers, spaces, hyphens, or underscores."
+    if normalized.casefold() in {name.casefold() for name in RESERVED_USERNAMES}:
+        return None, "That display name is reserved."
+    return normalized, None
+
+
+def public_name_from(username, display_name=None):
+    custom = normalize_display_name(display_name) or ""
+    return custom or username
+
+
+def avatar_url_for(account_id, avatar_ext):
+    if not avatar_ext:
+        return None
+    return f"/api/avatars/{account_id}"
+
+
+def mapping_get(row, key, default=None):
+    try:
+        value = row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return default if value is None else value
+
+
+def serialize_account(account, warning_count=0):
+    display_name = mapping_get(account, "display_name") or None
+    avatar_ext = mapping_get(account, "avatar_ext") or None
+    return {
+        "id": account["id"],
+        "username": account["username"],
+        "display_name": display_name,
+        "public_name": public_name_from(account["username"], display_name),
+        "avatar_url": avatar_url_for(account["id"], avatar_ext),
+        "role": account["role"],
+        "warning_count": warning_count,
+    }
 
 
 def create_app(test_config=None):
@@ -184,7 +307,7 @@ def create_app(test_config=None):
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.environ.get("CHATROOM_COOKIE_SECURE", "0") == "1",
         PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 14,
-        MAX_CONTENT_LENGTH=64 * 1024,
+        MAX_CONTENT_LENGTH=300 * 1024,
     )
     if test_config:
         app.config.update(test_config)
@@ -198,10 +321,40 @@ def create_app(test_config=None):
     else:
         app.config["USE_SUPABASE"] = supabase_url.startswith("postgres")
 
+    if app.config["USE_SUPABASE"]:
+        postgres_pool = create_postgres_pool(app.config["SUPABASE_DB_URL"])
+        app.extensions["postgres_pool"] = postgres_pool
+        atexit.register(postgres_pool.close)
+
+    def data_directory():
+        if app.config["USE_SUPABASE"]:
+            path = Path(project_dir / "data")
+        else:
+            path = Path(app.config["DATABASE"]).resolve().parent
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def avatars_directory():
+        path = data_directory() / "avatars"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def avatar_path_for(account_id, avatar_ext):
+        return avatars_directory() / f"{int(account_id)}.{avatar_ext}"
+
+    def clear_avatar_files(account_id):
+        folder = avatars_directory()
+        for path in folder.glob(f"{int(account_id)}.*"):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
     def get_db():
         if "db" not in g:
             if app.config["USE_SUPABASE"]:
-                g.db = PostgresConnection(app.config["SUPABASE_DB_URL"])
+                pool = app.extensions["postgres_pool"]
+                g.db = PostgresConnection(pool.getconn())
             else:
                 database_path = Path(app.config["DATABASE"])
                 database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -215,8 +368,24 @@ def create_app(test_config=None):
     @app.teardown_appcontext
     def close_db(_error=None):
         connection = g.pop("db", None)
-        if connection is not None:
-            connection.close()
+        if connection is None:
+            return
+        if app.config["USE_SUPABASE"] and getattr(connection, "pooled", False):
+            pool = app.extensions.get("postgres_pool")
+            raw = connection.raw
+            try:
+                raw.rollback()
+            except Exception:
+                try:
+                    raw.close()
+                except Exception:
+                    pass
+            if pool is not None:
+                pool.putconn(raw)
+            elif not raw.closed:
+                raw.close()
+            return
+        connection.close()
 
     def seed_reads_for_account(database, account_id):
         if database.execute(
@@ -275,6 +444,8 @@ def create_app(test_config=None):
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'member'
                     CHECK (role IN ('member', 'admin')),
+                display_name TEXT,
+                avatar_ext TEXT,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
             CREATE TABLE IF NOT EXISTS messages (
@@ -283,6 +454,7 @@ def create_app(test_config=None):
                 body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500),
                 is_deleted INTEGER NOT NULL DEFAULT 0,
                 reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+                edited_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
             CREATE INDEX IF NOT EXISTS messages_id_idx ON messages(id);
@@ -292,6 +464,7 @@ def create_app(test_config=None):
                 recipient_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
                 body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500),
                 reply_to_id INTEGER REFERENCES direct_messages(id) ON DELETE SET NULL,
+                edited_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
             CREATE INDEX IF NOT EXISTS direct_messages_sender_idx
@@ -331,6 +504,7 @@ def create_app(test_config=None):
             CREATE TABLE IF NOT EXISTS deleted_accounts (
                 account_id INTEGER PRIMARY KEY,
                 username TEXT NOT NULL,
+                display_name TEXT,
                 deleted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
             CREATE TABLE IF NOT EXISTS account_warnings (
@@ -342,6 +516,42 @@ def create_app(test_config=None):
             );
             """
         )
+        account_columns = {
+            row["name"] for row in database.execute("PRAGMA table_info(accounts)")
+        }
+        if "display_name" not in account_columns:
+            database.execute("ALTER TABLE accounts ADD COLUMN display_name TEXT")
+        if "avatar_ext" not in account_columns:
+            database.execute("ALTER TABLE accounts ADD COLUMN avatar_ext TEXT")
+        database.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS accounts_display_name_ci
+                ON accounts(display_name COLLATE NOCASE)
+                WHERE display_name IS NOT NULL
+            """
+        )
+        deleted_columns = {
+            row["name"] for row in database.execute("PRAGMA table_info(deleted_accounts)")
+        }
+        if "display_name" not in deleted_columns:
+            database.execute("ALTER TABLE deleted_accounts ADD COLUMN display_name TEXT")
+        # Non-unique indexes only: older DBs may already have duplicate deleted
+        # usernames from before names were permanently reserved.
+        database.execute("DROP INDEX IF EXISTS deleted_accounts_username_ci")
+        database.execute("DROP INDEX IF EXISTS deleted_accounts_display_name_ci")
+        database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS deleted_accounts_username_ci
+                ON deleted_accounts(username COLLATE NOCASE)
+            """
+        )
+        database.execute(
+            """
+            CREATE INDEX IF NOT EXISTS deleted_accounts_display_name_ci
+                ON deleted_accounts(display_name COLLATE NOCASE)
+                WHERE display_name IS NOT NULL
+            """
+        )
         message_columns = {
             row["name"] for row in database.execute("PRAGMA table_info(messages)")
         }
@@ -351,6 +561,8 @@ def create_app(test_config=None):
             database.execute(
                 "ALTER TABLE messages ADD COLUMN reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL"
             )
+        if "edited_at" not in message_columns:
+            database.execute("ALTER TABLE messages ADD COLUMN edited_at TEXT")
         direct_message_columns = {
             row["name"] for row in database.execute("PRAGMA table_info(direct_messages)")
         }
@@ -358,6 +570,8 @@ def create_app(test_config=None):
             database.execute(
                 "ALTER TABLE direct_messages ADD COLUMN reply_to_id INTEGER REFERENCES direct_messages(id) ON DELETE SET NULL"
             )
+        if "edited_at" not in direct_message_columns:
+            database.execute("ALTER TABLE direct_messages ADD COLUMN edited_at TEXT")
         database.executescript(
             """
             CREATE TRIGGER IF NOT EXISTS messages_insert_event
@@ -413,9 +627,52 @@ def create_app(test_config=None):
         if not isinstance(account_id, int):
             return None
         return get_db().execute(
-            "SELECT id, username, role FROM accounts WHERE id = ?",
+            "SELECT id, username, role, display_name, avatar_ext FROM accounts WHERE id = ?",
             (account_id,),
         ).fetchone()
+
+    def taken_identity_names(database, exclude_account_id=None):
+        """Return casefolded animal/display names already claimed (active or deleted)."""
+        names = set()
+        for row in database.execute("SELECT id, username, display_name FROM accounts"):
+            if exclude_account_id is not None and row["id"] == exclude_account_id:
+                continue
+            names.add(row["username"].casefold())
+            if row["display_name"]:
+                names.add(row["display_name"].casefold())
+        for row in database.execute("SELECT username, display_name FROM deleted_accounts"):
+            names.add(row["username"].casefold())
+            if row["display_name"]:
+                names.add(row["display_name"].casefold())
+        return names
+
+    def author_fields(animal_username, display_name, account_id, avatar_ext, deleted=False, use_profile=False):
+        """Build author fields for messages.
+
+        World chat stays anonymous (animal name, letter avatar). DMs can show
+        the member's optional display name and profile photo.
+        """
+        if deleted or not animal_username or animal_username == "[DELETED]":
+            return {
+                "username": "[DELETED]",
+                "animal_username": None,
+                "display_name": None,
+                "avatar_url": None,
+            }
+        if use_profile:
+            public = public_name_from(animal_username, display_name)
+            return {
+                "username": public,
+                "animal_username": animal_username,
+                "display_name": display_name or None,
+                "avatar_url": avatar_url_for(account_id, avatar_ext),
+            }
+        return {
+            "username": animal_username,
+            "animal_username": animal_username,
+            "display_name": None,
+            "avatar_url": None,
+        }
 
     def pending_warning_count(database, account_id):
         return database.execute(
@@ -517,10 +774,10 @@ def create_app(test_config=None):
             ).fetchall()
         }
 
-    def deliver_push(database, account_id, payload):
+    def deliver_push(database, account_id, payload, *, skip_foreground=True):
         if not push_is_configured():
             return
-        visible = foreground_endpoints(database, account_id)
+        visible = foreground_endpoints(database, account_id) if skip_foreground else set()
         subscriptions = database.execute(
             "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE account_id = ?",
             (account_id,),
@@ -558,6 +815,21 @@ def create_app(test_config=None):
                 ((sid,) for sid in expired_ids),
             )
             database.commit()
+
+    def send_read_sync(database, account_id, *, clear_tags=None, clear_all=False):
+        summary = unread_payload(database, account_id)
+        deliver_push(
+            database,
+            account_id,
+            {
+                "type": "read-sync",
+                "badgeCount": summary["total"],
+                "clearAll": bool(clear_all or summary["total"] == 0),
+                "clearTags": list(clear_tags or []),
+                "unread": summary,
+            },
+            skip_foreground=False,
+        )
 
     def send_room_push(database, author_id, author_username, message_id):
         recipients = database.execute(
@@ -637,20 +909,23 @@ def create_app(test_config=None):
         return wrapped
 
     def tombstone_account(database, account):
+        display_name = mapping_get(account, "display_name") or None
         database.execute(
             """
-            INSERT INTO deleted_accounts (account_id, username) VALUES (?, ?)
+            INSERT INTO deleted_accounts (account_id, username, display_name) VALUES (?, ?, ?)
             ON CONFLICT(account_id) DO UPDATE SET
                 username = excluded.username,
+                display_name = excluded.display_name,
                 deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             """,
-            (account["id"], account["username"]),
+            (account["id"], account["username"], display_name),
         )
         database.execute(
             "UPDATE messages SET body = '[DELETED]', is_deleted = 1, author_id = NULL WHERE author_id = ?",
             (account["id"],),
         )
         database.execute("DELETE FROM accounts WHERE id = ?", (account["id"],))
+        clear_avatar_files(account["id"])
 
     @app.get("/")
     def index():
@@ -692,12 +967,7 @@ def create_app(test_config=None):
             account_deleted=bool(deleted),
             deleted_username=deleted["username"] if deleted else None,
             user=(
-                {
-                    "id": account["id"],
-                    "username": account["username"],
-                    "role": account["role"],
-                    "warning_count": pending_warning_count(database, account["id"]),
-                }
+                serialize_account(account, pending_warning_count(database, account["id"]))
                 if account else None
             ),
         )
@@ -721,19 +991,20 @@ def create_app(test_config=None):
                 if count >= MAX_ACCOUNTS:
                     database.rollback()
                     return jsonify(error="The room is full. There are no more account slots."), 409
-                existing = {
-                    row[0].casefold()
-                    for row in database.execute("SELECT username FROM accounts")
-                }
+                existing = taken_identity_names(database)
+                reserved = {name.casefold() for name in RESERVED_USERNAMES}
                 available = [
                     name for name in ANIMALS
-                    if name.casefold() not in RESERVED_USERNAMES
-                    and name.casefold() not in existing
+                    if name.casefold() not in reserved and name.casefold() not in existing
                 ]
                 if not available:
                     database.rollback()
                     return jsonify(error="No animal usernames are available."), 409
                 username = secrets.choice(available)
+                # Guard against reserved/deleted names even if choice is patched or raced.
+                if username.casefold() not in {name.casefold() for name in available}:
+                    database.rollback()
+                    return jsonify(error="That username is already taken."), 409
                 password_hash = generate_password_hash(password)
                 cursor = database.execute(
                     "INSERT INTO accounts (username, password_hash) VALUES (?, ?) RETURNING id",
@@ -750,11 +1021,19 @@ def create_app(test_config=None):
                 return jsonify(error="Could not create the account. Please try again."), 500
         elif mode == "signin":
             submitted_username = data.get("username", "")
-            if not isinstance(submitted_username, str) or not submitted_username.isalpha():
+            if not isinstance(submitted_username, str):
+                return jsonify(error="Username or password is incorrect."), 401
+            submitted_username = submitted_username.strip()
+            if not submitted_username or len(submitted_username) > MAX_DISPLAY_NAME_LENGTH:
                 return jsonify(error="Username or password is incorrect."), 401
             account = database.execute(
-                "SELECT id, username, password_hash, role FROM accounts WHERE username = ? COLLATE NOCASE",
-                (submitted_username,),
+                """
+                SELECT id, username, password_hash, role, display_name, avatar_ext
+                FROM accounts
+                WHERE username = ? COLLATE NOCASE
+                   OR (display_name IS NOT NULL AND display_name = ? COLLATE NOCASE)
+                """,
+                (submitted_username, submitted_username),
             ).fetchone()
             if account is None:
                 deleted = database.execute(
@@ -770,20 +1049,17 @@ def create_app(test_config=None):
                 return jsonify(error="Username or password is incorrect."), 401
             if not check_password_hash(account["password_hash"], password):
                 return jsonify(error="Username or password is incorrect."), 401
-            username = account["username"]
             account_id = account["id"]
-            role = account["role"]
         else:
             return jsonify(error="Choose create account or sign in."), 400
 
-        if mode == "create":
-            role = "member"
         session.clear()
         session.permanent = True
         session["account_id"] = account_id
         token = csrf_token()
+        account = get_current_account()
         return jsonify(
-            user={"id": account_id, "username": username, "role": role, "warning_count": 0},
+            user=serialize_account(account, 0),
             csrf_token=token,
         ), 201 if mode == "create" else 200
 
@@ -826,12 +1102,20 @@ def create_app(test_config=None):
                 SELECT m.id,
                        CASE WHEN m.is_deleted = 1 OR a.id IS NULL THEN '[DELETED]' ELSE m.body END AS body,
                        m.created_at,
-                       COALESCE(a.username, '[DELETED]') AS username,
+                       m.edited_at,
+                       a.id AS author_id,
+                       a.username AS animal_username,
+                       a.display_name AS author_display_name,
+                       a.avatar_ext AS author_avatar_ext,
                        a.id = ? AS is_own,
                        m.is_deleted,
                        replied.id AS reply_id,
+                       replied_author.username AS reply_animal_username,
+                       replied_author.display_name AS reply_display_name,
+                       replied_author.id AS reply_author_id,
+                       replied_author.avatar_ext AS reply_avatar_ext,
                        CASE WHEN replied.is_deleted = 1 OR replied.author_id IS NULL
-                            THEN '[DELETED]' ELSE replied_author.username END AS reply_username,
+                            THEN 1 ELSE 0 END AS reply_deleted,
                        CASE WHEN replied.is_deleted = 1 OR replied.author_id IS NULL
                             THEN '[DELETED]' ELSE replied.body END AS reply_body,
                        changed.change_id
@@ -853,12 +1137,20 @@ def create_app(test_config=None):
                     SELECT m.id,
                            CASE WHEN m.is_deleted = 1 OR a.id IS NULL THEN '[DELETED]' ELSE m.body END AS body,
                            m.created_at,
-                           COALESCE(a.username, '[DELETED]') AS username,
+                           m.edited_at,
+                           a.id AS author_id,
+                           a.username AS animal_username,
+                           a.display_name AS author_display_name,
+                           a.avatar_ext AS author_avatar_ext,
                            a.id = ? AS is_own,
                            m.is_deleted,
                            replied.id AS reply_id,
+                           replied_author.username AS reply_animal_username,
+                           replied_author.display_name AS reply_display_name,
+                           replied_author.id AS reply_author_id,
+                           replied_author.avatar_ext AS reply_avatar_ext,
                            CASE WHEN replied.is_deleted = 1 OR replied.author_id IS NULL
-                                THEN '[DELETED]' ELSE replied_author.username END AS reply_username,
+                                THEN 1 ELSE 0 END AS reply_deleted,
                            CASE WHEN replied.is_deleted = 1 OR replied.author_id IS NULL
                                 THEN '[DELETED]' ELSE replied.body END AS reply_body
                     FROM messages AS m
@@ -871,23 +1163,51 @@ def create_app(test_config=None):
                 (g.account["id"],),
             ).fetchall()
             cursor = database.execute("SELECT COALESCE(MAX(id), 0) FROM message_events").fetchone()[0]
-        return jsonify(messages=[
-            {
+
+        def serialize_room_message(row):
+            author = author_fields(
+                row["animal_username"],
+                row["author_display_name"],
+                row["author_id"],
+                row["author_avatar_ext"],
+                deleted=row["animal_username"] is None,
+                use_profile=False,
+            )
+            reply_to = None
+            if row["reply_id"] is not None:
+                reply_author = author_fields(
+                    row["reply_animal_username"],
+                    row["reply_display_name"],
+                    row["reply_author_id"],
+                    row["reply_avatar_ext"],
+                    deleted=bool(row["reply_deleted"]),
+                    use_profile=False,
+                )
+                reply_to = {
+                    "id": row["reply_id"],
+                    "username": reply_author["username"],
+                    "text": row["reply_body"],
+                }
+            return {
                 "id": row["id"],
-                "username": row["username"],
+                "username": author["username"],
+                "animal_username": author["animal_username"],
+                "display_name": author["display_name"],
+                "avatar_url": author["avatar_url"],
                 "text": row["body"],
                 "created_at": row["created_at"],
                 "is_own": bool(row["is_own"]),
                 "is_deleted": bool(row["is_deleted"]),
-                "reply_to": None if row["reply_id"] is None else {
-                    "id": row["reply_id"],
-                    "username": row["reply_username"],
-                    "text": row["reply_body"],
-                },
+                "edited": bool(row["edited_at"]) and not bool(row["is_deleted"]),
+                "reply_to": reply_to,
             }
-            for row in rows
-        ], warnings=pending_warning_count(database, g.account["id"]), cursor=cursor,
-           unread=unread_payload(database, g.account["id"]))
+
+        return jsonify(
+            messages=[serialize_room_message(row) for row in rows],
+            warnings=pending_warning_count(database, g.account["id"]),
+            cursor=cursor,
+            unread=unread_payload(database, g.account["id"]),
+        )
 
     @app.post("/api/messages")
     @login_required
@@ -927,6 +1247,55 @@ def create_app(test_config=None):
         database.commit()
         send_room_push(database, g.account["id"], g.account["username"], message_id)
         return jsonify(id=message_id), 201
+
+    @app.patch("/api/messages/<int:message_id>")
+    @login_required
+    def api_edit_message(message_id):
+        data = request.get_json(silent=True) or {}
+        text = data.get("text", "")
+        if not isinstance(text, str):
+            return jsonify(error="Message must be text."), 400
+        text = text.strip()
+        if not text or len(text) > MAX_MESSAGE_LENGTH:
+            return jsonify(error="Messages must be between 1 and 500 characters."), 400
+        try:
+            moderation_error = moderate_message(text, app.config.get("OPENAI_API_KEY", ""))
+        except ModerationUnavailable:
+            return jsonify(error="Moderation is temporarily unavailable. Try again."), 503
+        if moderation_error:
+            return jsonify(error=moderation_error), 400
+
+        database = get_db()
+        message = database.execute(
+            """
+            SELECT id, author_id, body, is_deleted
+            FROM messages
+            WHERE id = ?
+            """,
+            (message_id,),
+        ).fetchone()
+        if message is None:
+            return jsonify(error="Message not found."), 404
+        if message["is_deleted"] or message["author_id"] is None:
+            return jsonify(error="This message can no longer be edited."), 400
+        if message["author_id"] != g.account["id"]:
+            return jsonify(error="You can only edit your own messages."), 403
+        if message["body"] == text:
+            current = database.execute(
+                "SELECT edited_at FROM messages WHERE id = ?",
+                (message_id,),
+            ).fetchone()
+            return jsonify(id=message_id, edited=bool(current["edited_at"]))
+        database.execute(
+            """
+            UPDATE messages
+            SET body = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?
+            """,
+            (text, message_id),
+        )
+        database.commit()
+        return jsonify(id=message_id, edited=True)
 
     @app.post("/api/reads")
     @login_required
@@ -972,16 +1341,41 @@ def create_app(test_config=None):
         else:
             return jsonify(error="Invalid read target."), 400
         database.commit()
-        return jsonify(unread_payload(database, g.account["id"]))
+        summary = unread_payload(database, g.account["id"])
+        if kind == "chat":
+            send_read_sync(database, g.account["id"], clear_tags=["pigin-chat"])
+        else:
+            send_read_sync(
+                database,
+                g.account["id"],
+                clear_tags=[f"pigin-dm-{partner_id}"],
+            )
+        return jsonify(summary)
+
+    def serialize_dm_person(row, last_message=None, last_message_at=None, include_animal=True):
+        public = public_name_from(row["username"], row["display_name"])
+        payload = {
+            "id": row["id"],
+            "username": public,
+            "display_name": row["display_name"],
+            "avatar_url": avatar_url_for(row["id"], row["avatar_ext"]),
+        }
+        if include_animal:
+            payload["animal_username"] = row["username"]
+        if last_message is not None or last_message_at is not None:
+            payload["last_message"] = last_message
+            payload["last_message_at"] = last_message_at
+        return payload
 
     @app.get("/api/dms")
     @login_required
     def api_dm_contacts():
         rows = get_db().execute(
             """
-            SELECT a.id, a.username, d.body AS last_message, d.created_at AS last_message_at
+            SELECT a.id, a.username, a.display_name, a.avatar_ext,
+                   d.body AS last_message, d.created_at AS last_message_at
             FROM accounts AS a
-            LEFT JOIN direct_messages AS d ON d.id = (
+            JOIN direct_messages AS d ON d.id = (
                 SELECT latest.id
                 FROM direct_messages AS latest
                 WHERE (latest.sender_id = ? AND latest.recipient_id = a.id)
@@ -990,13 +1384,58 @@ def create_app(test_config=None):
                 LIMIT 1
             )
             WHERE a.id != ?
-            ORDER BY CASE WHEN d.id IS NULL THEN 1 ELSE 0 END,
-                     d.id DESC,
-                     a.username COLLATE NOCASE
+            ORDER BY d.id DESC,
+                     COALESCE(a.display_name, a.username) COLLATE NOCASE
             """,
             (g.account["id"], g.account["id"], g.account["id"]),
         ).fetchall()
-        return jsonify(contacts=[dict(row) for row in rows])
+        return jsonify(contacts=[
+            serialize_dm_person(row, row["last_message"], row["last_message_at"])
+            for row in rows
+        ])
+
+    @app.get("/api/dms/search")
+    @login_required
+    def api_dm_search():
+        query = request.args.get("q", "")
+        if not isinstance(query, str):
+            return jsonify(error="Search must be text."), 400
+        query = query.strip()
+        if not query:
+            return jsonify(results=[])
+        if len(query) > MAX_DISPLAY_NAME_LENGTH:
+            return jsonify(error="Search is too long."), 400
+        escaped = (
+            query.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = f"%{escaped}%"
+        # Custom display names are always searchable. Animal usernames are only
+        # searchable when the account has not set a display name.
+        rows = get_db().execute(
+            """
+            SELECT id, username, display_name, avatar_ext
+            FROM accounts
+            WHERE id != ?
+              AND (
+                (
+                    display_name IS NOT NULL
+                    AND display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                )
+                OR (
+                    display_name IS NULL
+                    AND username LIKE ? ESCAPE '\\' COLLATE NOCASE
+                )
+              )
+            ORDER BY COALESCE(display_name, username) COLLATE NOCASE
+            LIMIT 20
+            """,
+            (g.account["id"], pattern, pattern),
+        ).fetchall()
+        return jsonify(results=[
+            serialize_dm_person(row, include_animal=False) for row in rows
+        ])
 
     @app.get("/api/dms/<int:account_id>")
     @login_required
@@ -1007,36 +1446,61 @@ def create_app(test_config=None):
             after_id = max(0, int(request.args.get("after", "0")))
         except ValueError:
             return jsonify(error="Invalid message cursor."), 400
+        since = request.args.get("since", "")
+        if since is None:
+            since = ""
+        if not isinstance(since, str):
+            return jsonify(error="Invalid sync cursor."), 400
+        since = since.strip()
 
         database = get_db()
         if database.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
             return jsonify(error="Account not found."), 404
         parameters = (g.account["id"], account_id, account_id, g.account["id"])
+        server_time = database.execute(
+            "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS server_time"
+        ).fetchone()["server_time"]
         if after_id:
             rows = database.execute(
                 """
-                SELECT d.id, d.sender_id, d.body, d.created_at, a.username,
+                SELECT d.id, d.sender_id, d.body, d.created_at, d.edited_at,
+                       a.username AS animal_username, a.display_name, a.avatar_ext,
                        replied.id AS reply_id, replied.body AS reply_body,
-                       replied_author.username AS reply_username
+                       replied_author.id AS reply_author_id,
+                       replied_author.username AS reply_animal_username,
+                       replied_author.display_name AS reply_display_name,
+                       replied_author.avatar_ext AS reply_avatar_ext
                 FROM direct_messages AS d
                 JOIN accounts AS a ON a.id = d.sender_id
                 LEFT JOIN direct_messages AS replied ON replied.id = d.reply_to_id
                 LEFT JOIN accounts AS replied_author ON replied_author.id = replied.sender_id
                 WHERE ((d.sender_id = ? AND d.recipient_id = ?)
                     OR (d.sender_id = ? AND d.recipient_id = ?))
-                  AND d.id > ?
+                  AND (
+                    d.id > ?
+                    OR (
+                      ? != ''
+                      AND d.edited_at IS NOT NULL
+                      AND d.edited_at > ?
+                      AND d.id <= ?
+                    )
+                  )
                 ORDER BY d.id ASC
                 LIMIT 100
                 """,
-                (*parameters, after_id),
+                (*parameters, after_id, since, since, after_id),
             ).fetchall()
         else:
             rows = database.execute(
                 """
                 SELECT * FROM (
-                    SELECT d.id, d.sender_id, d.body, d.created_at, a.username,
+                    SELECT d.id, d.sender_id, d.body, d.created_at, d.edited_at,
+                           a.username AS animal_username, a.display_name, a.avatar_ext,
                            replied.id AS reply_id, replied.body AS reply_body,
-                           replied_author.username AS reply_username
+                           replied_author.id AS reply_author_id,
+                           replied_author.username AS reply_animal_username,
+                           replied_author.display_name AS reply_display_name,
+                           replied_author.avatar_ext AS reply_avatar_ext
                     FROM direct_messages AS d
                     JOIN accounts AS a ON a.id = d.sender_id
                     LEFT JOIN direct_messages AS replied ON replied.id = d.reply_to_id
@@ -1049,24 +1513,48 @@ def create_app(test_config=None):
                 """,
                 parameters,
             ).fetchall()
-        cursor = max((row["id"] for row in rows), default=after_id)
-        return jsonify(
-            messages=[
-                {
-                    "id": row["id"],
-                    "username": row["username"],
-                    "text": row["body"],
-                    "created_at": row["created_at"],
-                    "is_own": row["sender_id"] == g.account["id"],
-                    "reply_to": None if row["reply_id"] is None else {
-                        "id": row["reply_id"],
-                        "username": row["reply_username"],
-                        "text": row["reply_body"],
-                    },
+        cursor = max((row["id"] for row in rows if row["id"] > after_id), default=after_id)
+
+        def serialize_dm(row):
+            author = author_fields(
+                row["animal_username"],
+                row["display_name"],
+                row["sender_id"],
+                row["avatar_ext"],
+                use_profile=True,
+            )
+            reply_to = None
+            if row["reply_id"] is not None:
+                reply_author = author_fields(
+                    row["reply_animal_username"],
+                    row["reply_display_name"],
+                    row["reply_author_id"],
+                    row["reply_avatar_ext"],
+                    deleted=row["reply_animal_username"] is None,
+                    use_profile=True,
+                )
+                reply_to = {
+                    "id": row["reply_id"],
+                    "username": reply_author["username"],
+                    "text": row["reply_body"],
                 }
-                for row in rows
-            ],
+            return {
+                "id": row["id"],
+                "username": author["username"],
+                "animal_username": author["animal_username"],
+                "display_name": author["display_name"],
+                "avatar_url": author["avatar_url"],
+                "text": row["body"],
+                "created_at": row["created_at"],
+                "is_own": row["sender_id"] == g.account["id"],
+                "edited": bool(row["edited_at"]),
+                "reply_to": reply_to,
+            }
+
+        return jsonify(
+            messages=[serialize_dm(row) for row in rows],
             cursor=cursor,
+            server_time=server_time,
         )
 
     @app.post("/api/dms/<int:account_id>")
@@ -1112,8 +1600,150 @@ def create_app(test_config=None):
         )
         message_id = inserted_id(cursor)
         database.commit()
-        send_dm_push(database, account_id, g.account["id"], g.account["username"])
+        send_dm_push(
+            database,
+            account_id,
+            g.account["id"],
+            public_name_from(g.account["username"], mapping_get(g.account, "display_name")),
+        )
         return jsonify(id=message_id), 201
+
+    @app.patch("/api/dms/<int:account_id>/messages/<int:message_id>")
+    @login_required
+    def api_edit_dm(account_id, message_id):
+        if account_id == g.account["id"]:
+            return jsonify(error="You can't send a message to yourself."), 400
+        data = request.get_json(silent=True) or {}
+        text = data.get("text", "")
+        if not isinstance(text, str):
+            return jsonify(error="Message must be text."), 400
+        text = text.strip()
+        if not text or len(text) > MAX_MESSAGE_LENGTH:
+            return jsonify(error="Messages must be between 1 and 500 characters."), 400
+        try:
+            moderation_error = moderate_message(text, app.config.get("OPENAI_API_KEY", ""))
+        except ModerationUnavailable:
+            return jsonify(error="Moderation is temporarily unavailable. Try again."), 503
+        if moderation_error:
+            return jsonify(error=moderation_error), 400
+
+        database = get_db()
+        if database.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
+            return jsonify(error="Account not found."), 404
+        message = database.execute(
+            """
+            SELECT id, sender_id, recipient_id, body
+            FROM direct_messages
+            WHERE id = ?
+            """,
+            (message_id,),
+        ).fetchone()
+        if message is None:
+            return jsonify(error="Message not found."), 404
+        partners = {message["sender_id"], message["recipient_id"]}
+        if g.account["id"] not in partners or account_id not in partners:
+            return jsonify(error="Message not found."), 404
+        if message["sender_id"] != g.account["id"]:
+            return jsonify(error="You can only edit your own messages."), 403
+        if message["body"] == text:
+            edited = database.execute(
+                "SELECT edited_at FROM direct_messages WHERE id = ?",
+                (message_id,),
+            ).fetchone()
+            return jsonify(id=message_id, edited=bool(edited["edited_at"]))
+        database.execute(
+            """
+            UPDATE direct_messages
+            SET body = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?
+            """,
+            (text, message_id),
+        )
+        database.commit()
+        return jsonify(id=message_id, edited=True)
+
+    @app.patch("/api/profile")
+    @login_required
+    def api_update_profile():
+        data = request.get_json(silent=True) or {}
+        if "display_name" not in data:
+            return jsonify(error="Send a display_name field."), 400
+        display_name, error = validate_display_name(data.get("display_name"))
+        if error:
+            return jsonify(error=error), 400
+        database = get_db()
+        if display_name:
+            taken = taken_identity_names(database, exclude_account_id=g.account["id"])
+            if display_name.casefold() in taken:
+                return jsonify(error="That name is already taken."), 409
+        try:
+            database.execute(
+                "UPDATE accounts SET display_name = ? WHERE id = ?",
+                (display_name or None, g.account["id"]),
+            )
+            database.commit()
+        except Exception as exc:
+            if not _is_database_error(exc):
+                raise
+            database.rollback()
+            return jsonify(error="That name is already taken."), 409
+        account = get_current_account()
+        return jsonify(user=serialize_account(account, pending_warning_count(database, account["id"])))
+
+    @app.post("/api/profile/avatar")
+    @login_required
+    def api_upload_avatar():
+        upload = request.files.get("avatar")
+        if upload is None or not upload.filename:
+            return jsonify(error="Choose an image to upload."), 400
+        payload = upload.read(AVATAR_MAX_BYTES + 1)
+        if not payload:
+            return jsonify(error="That image file is empty."), 400
+        if len(payload) > AVATAR_MAX_BYTES:
+            return jsonify(error="Images must be 256 KB or smaller."), 400
+        extension = detect_avatar_extension(payload, upload.mimetype, upload.filename)
+        if extension is None:
+            return jsonify(error="Use a JPEG, PNG, or WebP image."), 400
+        clear_avatar_files(g.account["id"])
+        avatar_path_for(g.account["id"], extension).write_bytes(payload)
+        database = get_db()
+        database.execute(
+            "UPDATE accounts SET avatar_ext = ? WHERE id = ?",
+            (extension, g.account["id"]),
+        )
+        database.commit()
+        account = get_current_account()
+        return jsonify(user=serialize_account(account, pending_warning_count(database, account["id"])))
+
+    @app.delete("/api/profile/avatar")
+    @login_required
+    def api_delete_avatar():
+        clear_avatar_files(g.account["id"])
+        database = get_db()
+        database.execute(
+            "UPDATE accounts SET avatar_ext = NULL WHERE id = ?",
+            (g.account["id"],),
+        )
+        database.commit()
+        account = get_current_account()
+        return jsonify(user=serialize_account(account, pending_warning_count(database, account["id"])))
+
+    @app.get("/api/avatars/<int:account_id>")
+    @login_required
+    def api_get_avatar(account_id):
+        row = get_db().execute(
+            "SELECT avatar_ext FROM accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+        if row is None or not row["avatar_ext"]:
+            abort(404)
+        path = avatar_path_for(account_id, row["avatar_ext"])
+        if not path.is_file():
+            abort(404)
+        mime = AVATAR_EXTENSIONS.get(row["avatar_ext"], "application/octet-stream")
+        response = send_from_directory(path.parent, path.name, mimetype=mime)
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        return response
 
     @app.get("/api/push/config")
     @login_required
@@ -1236,15 +1866,22 @@ def create_app(test_config=None):
     def api_admin_accounts():
         rows = get_db().execute(
             """
-            SELECT a.id, a.username, a.role, a.created_at, COUNT(m.id) AS message_count
+            SELECT a.id, a.username, a.display_name, a.avatar_ext, a.role, a.created_at,
+                   COUNT(m.id) AS message_count
             FROM accounts AS a
             LEFT JOIN messages AS m ON m.author_id = a.id
             GROUP BY a.id
             ORDER BY CASE WHEN a.role = 'admin' THEN 0 ELSE 1 END,
-                     a.username COLLATE NOCASE
+                     COALESCE(a.display_name, a.username) COLLATE NOCASE
             """
         ).fetchall()
-        return jsonify(accounts=[dict(row) for row in rows])
+        accounts = []
+        for row in rows:
+            item = dict(row)
+            item["public_name"] = public_name_from(row["username"], row["display_name"])
+            item["avatar_url"] = avatar_url_for(row["id"], row["avatar_ext"])
+            accounts.append(item)
+        return jsonify(accounts=accounts)
 
     @app.get("/api/admin/messages")
     @login_required
@@ -1271,7 +1908,7 @@ def create_app(test_config=None):
         database = get_db()
         database.execute("BEGIN IMMEDIATE")
         account = database.execute(
-            "SELECT id, username, role FROM accounts WHERE id = ?",
+            "SELECT id, username, display_name, role FROM accounts WHERE id = ?",
             (account_id,),
         ).fetchone()
         if account is None:
@@ -1355,11 +1992,8 @@ def create_app(test_config=None):
             raise click.ClickException("Account not found.")
 
         updated_username = new_username or account["username"]
-        conflict = database.execute(
-            "SELECT 1 FROM accounts WHERE username = ? COLLATE NOCASE AND id != ?",
-            (updated_username, account["id"]),
-        ).fetchone()
-        if conflict:
+        taken = taken_identity_names(database, exclude_account_id=account["id"])
+        if updated_username.casefold() in taken:
             database.rollback()
             raise click.ClickException(f"Username {updated_username} is already in use.")
 
@@ -1376,7 +2010,7 @@ def create_app(test_config=None):
         """Delete a member; their messages remain marked [DELETED]."""
         database = get_db()
         account = database.execute(
-            "SELECT id, username, role FROM accounts WHERE username = ? COLLATE NOCASE",
+            "SELECT id, username, display_name, role FROM accounts WHERE username = ? COLLATE NOCASE",
             (username,),
         ).fetchone()
         if account is None:
@@ -1397,7 +2031,7 @@ def create_app(test_config=None):
         if admin is None:
             raise click.ClickException("No admin account exists; nothing was deleted.")
         members = database.execute(
-            "SELECT id, username FROM accounts WHERE id != ? AND role != 'admin'",
+            "SELECT id, username, display_name FROM accounts WHERE id != ? AND role != 'admin'",
             (admin["id"],),
         ).fetchall()
         for member in members:

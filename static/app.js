@@ -10,16 +10,47 @@ const feed = document.querySelector("#feed");
 const messageInput = document.querySelector("#messageInput");
 const sendButton = document.querySelector("#sendButton");
 const replyPreview = document.querySelector("#replyPreview");
+const replyPreviewLabel = document.querySelector("#replyPreviewLabel");
 const replyPreviewText = document.querySelector("#replyPreviewText");
 const messageError = document.querySelector("#messageError");
 const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
+const versionNotesScreen = document.querySelector("#versionNotesScreen");
+const APP_VERSION = "1.12.2";
+const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
+const VERSION_NOTES = {
+  "1.12.2": [
+    "A looping pigeon animation now keeps you company while PIGIN loads, including chats and DMs.",
+  ],
+  "1.12.1": [
+    "Tap the ··· on a message for Reply or Edit.",
+    "Edit your own messages in chat and DMs.",
+  ],
+  "1.11.3": [
+    "Messages appear instantly when you send them.",
+    "If a message is blocked, it stays in your chat with a clear rejection notice.",
+  ],
+  "1.11.2": [
+    "Chat should feel snappier with less lag when several people are online.",
+    "Casual swearing is allowed; sexual insults, slurs, and disrespect are still blocked.",
+  ],
+  "1.11.1": [
+    "Animal usernames stay private in search once you set a display name.",
+    "Profile photos resize automatically so larger uploads can be saved.",
+    "Reading messages on one device clears notifications and badges on your other devices.",
+  ],
+  "1.11.0": [
+    "Set a custom display name and profile photo in Settings — they show in DMs only.",
+    "World Chat stays anonymous with your animal username.",
+    "DMs only list people you’ve already texted; search a username to start a new chat.",
+    "Sign in with either your animal username or your display name.",
+    "Searchable emoji picker in chat and DMs.",
+    "Stronger free message filtering for swearing, insults, and common evasions.",
+  ],
+};
 const warningText = document.querySelector("#warningText");
 const warningAction = document.querySelector("#warningAction");
-const whatsNewScreen = document.querySelector("#whatsNewScreen");
-const whatsNewDismiss = document.querySelector("#whatsNewDismiss");
-const whatsNewVersion = "1.12.2";
 const adminTab = document.querySelector("#adminTab");
 const chatTab = document.querySelector("#chatTab");
 const dmTab = document.querySelector("#dmTab");
@@ -43,6 +74,7 @@ const dmMessageInput = document.querySelector("#dmMessageInput");
 const dmSendButton = document.querySelector("#dmSendButton");
 const dmMessageError = document.querySelector("#dmMessageError");
 const dmReplyPreview = document.querySelector("#dmReplyPreview");
+const dmReplyPreviewLabel = document.querySelector("#dmReplyPreviewLabel");
 const dmReplyPreviewText = document.querySelector("#dmReplyPreviewText");
 const pushToggle = document.querySelector("#pushToggle");
 const pushHintText = document.querySelector("#pushHintText");
@@ -51,13 +83,24 @@ let currentUser = null;
 let csrfToken = "";
 let messageCursor = 0;
 let replyingTo = null;
+let editingMessage = null;
 let replyingToDm = null;
+let editingDmMessage = null;
 let selectedDmUser = null;
 let dmMessageCursor = 0;
+let dmPollSince = "";
 let dmContactsSnapshot = "";
 let activeView = "chat";
+let openMessageMenu = null;
 let accountCreatedTimeout;
 let pollingTimer;
+let messagesLoading = false;
+let dmContactsLoading = false;
+let dmMessagesLoading = false;
+let presenceLastSentAt = 0;
+const POLL_VISIBLE_MS = 4000;
+const POLL_HIDDEN_MS = 15000;
+const PRESENCE_MIN_INTERVAL_MS = 8000;
 let warningKind = null;
 let pendingDmPartnerId = null;
 let pushHint = "";
@@ -183,8 +226,10 @@ async function syncReadState(fallback, force = false) {
   const viewingDm = document.visibilityState === "visible" && activeView === "dms" && selectedDmUser;
   try {
     let summary = fallback;
+    let markedRead = false;
     if (viewingChat && (force || (fallback?.group || 0) > 0)) {
       summary = await api("/api/reads", { method: "POST", body: JSON.stringify({ kind: "chat" }) });
+      markedRead = true;
     } else if (
       viewingDm
       && (force || (fallback?.conversations?.[String(selectedDmUser.id)] || 0) > 0)
@@ -193,9 +238,11 @@ async function syncReadState(fallback, force = false) {
         method: "POST",
         body: JSON.stringify({ kind: "dm", partner_id: selectedDmUser.id }),
       });
+      markedRead = true;
     }
     if (epoch !== readSyncEpoch || !summary) return;
     applyUnread(summary);
+    if (markedRead) closeAppNotifications();
   } catch (error) {
     if (epoch === readSyncEpoch && error.status === 401) showLogin();
   }
@@ -264,7 +311,7 @@ function setAuthMode(mode) {
   confirmInput.required = !signingIn;
   passwordInput.autocomplete = signingIn ? "current-password" : "new-password";
   document.querySelector("#loginCopy").textContent = signingIn
-    ? "Sign in with your animal username and password."
+    ? "Sign in with your animal username or display name, and password."
     : "Create an account with a password. We’ll give you an animal name.";
   document.querySelector("#authSubmit").textContent = signingIn ? "Sign in" : "Create account";
   authError.hidden = true;
@@ -277,8 +324,11 @@ function showLogin() {
   messageCursor = 0;
   warningKind = null;
   clearReply();
+  clearEdit();
+  closeMessageMenu();
   messageError.hidden = true;
   warningScreen.hidden = true;
+  versionNotesScreen.hidden = true;
   feed.replaceChildren();
   dmFeed.replaceChildren();
   dmContacts.replaceChildren();
@@ -308,7 +358,7 @@ function showLogin() {
 }
 
 function showAccountCreated(username) {
-  accountCreatedNotice.textContent = `Account Created, Your animal username is ${username}.`;
+  accountCreatedNotice.textContent = `Account created. Your animal username is ${username}. Set a display name anytime in Settings.`;
   accountCreatedNotice.hidden = false;
   clearTimeout(accountCreatedTimeout);
   accountCreatedTimeout = setTimeout(() => {
@@ -316,15 +366,138 @@ function showAccountCreated(username) {
   }, 7000);
 }
 
-function showRoom(user) {
+function publicNameFor(person) {
+  return person.public_name || person.display_name || person.username || "";
+}
+
+function fillAvatarElement(element, person, { own = false, deleted = false } = {}) {
+  const name = publicNameFor(person);
+  element.classList.toggle("own", own && !deleted);
+  element.classList.toggle("deleted", deleted);
+  element.classList.toggle("has-image", Boolean(person.avatar_url) && !deleted);
+  element.replaceChildren();
+  if (person.avatar_url && !deleted) {
+    const image = document.createElement("img");
+    image.src = person.avatar_url;
+    image.alt = "";
+    element.append(image);
+  } else {
+    element.textContent = deleted || !name ? "?" : name[0].toUpperCase();
+  }
+}
+
+function showProfileError(message) {
+  const profileError = document.querySelector("#profileError");
+  profileError.textContent = message || "";
+  profileError.hidden = !message;
+}
+
+const AVATAR_MAX_BYTES = 256 * 1024;
+const AVATAR_MAX_EDGE = 512;
+
+function bustAvatarUrl(url) {
+  if (!url) return null;
+  const base = url.split("?")[0];
+  return `${base}?v=${Date.now()}`;
+}
+
+async function prepareAvatarUpload(file) {
+  if (!file || !file.type.startsWith("image/")) {
+    throw new Error("Use a JPEG, PNG, or WebP image.");
+  }
+  if (file.size <= AVATAR_MAX_BYTES && file.type !== "image/heic" && file.type !== "image/heif") {
+    return file;
+  }
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    throw new Error("Could not read that image. Try a JPEG, PNG, or WebP under 256 KB.");
+  }
+  const scale = Math.min(1, AVATAR_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    bitmap.close?.();
+    throw new Error("Could not prepare that photo.");
+  }
+  context.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close?.();
+  for (const quality of [0.86, 0.72, 0.58, 0.44, 0.32]) {
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
+    if (blob && blob.size <= AVATAR_MAX_BYTES) {
+      return new File([blob], "avatar.jpg", { type: "image/jpeg", lastModified: Date.now() });
+    }
+  }
+  throw new Error("That photo is still too large after resizing. Try a smaller image.");
+}
+
+async function uploadAvatarFile(file, retryCsrf = true) {
+  if (!csrfToken) {
+    const sessionData = await api("/api/session");
+    csrfToken = sessionData.csrf_token;
+  }
+  const body = new FormData();
+  body.append("avatar", file);
+  const response = await fetch("/api/profile/avatar", {
+    method: "POST",
+    headers: { Accept: "application/json", "X-CSRF-Token": csrfToken },
+    body,
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => ({}));
+  if (
+    response.status === 400
+    && retryCsrf
+    && data.error === "The request expired. Refresh and try again."
+  ) {
+    const sessionData = await api("/api/session");
+    csrfToken = sessionData.csrf_token;
+    return uploadAvatarFile(file, false);
+  }
+  if (!response.ok) {
+    const error = new Error(data.error || "Could not upload that photo.");
+    error.status = response.status;
+    throw error;
+  }
+  if (data.csrf_token) csrfToken = data.csrf_token;
+  if (data.user?.avatar_url) data.user.avatar_url = bustAvatarUrl(data.user.avatar_url);
+  return data;
+}
+
+function refreshProfileSettings() {
+  if (!currentUser) return;
+  const settingsAvatar = document.querySelector("#settingsAvatar");
+  const displayNameInput = document.querySelector("#displayNameInput");
+  const removeAvatarButton = document.querySelector("#removeAvatarButton");
+  document.querySelector("#settingsAnimalName").textContent = currentUser.username;
+  displayNameInput.value = currentUser.display_name || "";
+  fillAvatarElement(settingsAvatar, currentUser);
+  removeAvatarButton.hidden = !currentUser.avatar_url;
+  showProfileError("");
+}
+
+function applyCurrentUser(user) {
   currentUser = user;
+  document.querySelector("#animalName").textContent = publicNameFor(user);
+  refreshProfileSettings();
+}
+
+function showRoom(user) {
+  applyCurrentUser(user);
   loginScreen.hidden = true;
   room.hidden = false;
-  document.querySelector("#animalName").textContent = user.username;
   passwordInput.value = "";
   confirmInput.value = "";
   messageCursor = 0;
   clearReply();
+  clearEdit();
+  closeMessageMenu();
   messageError.hidden = true;
   feed.replaceChildren();
   feed.append(createLoadingIndicator("Loading messages"));
@@ -348,17 +521,11 @@ function showRoom(user) {
   adminTab.classList.remove("active");
   adminTab.setAttribute("aria-pressed", "false");
   updateRoomTitle("chat");
-  loadMessages();
-  clearInterval(pollingTimer);
-  pollingTimer = setInterval(() => {
-    loadMessages();
-    if (activeView === "dms") {
-      loadDmContacts();
-      loadDmMessages();
-    }
-  }, 2500);
+  startPolling();
   if (user.warning_count) {
     showWarning("message", `${user.warning_count === 1 ? "An admin deleted one of your messages" : `An admin deleted ${user.warning_count} of your messages`}. Deleted messages remain in the chat as [DELETED].`);
+  } else {
+    maybeShowVersionNotes();
   }
   if (isAdmin) loadAdminData();
   pendingDmPartnerId = readDmDeepLink();
@@ -371,11 +538,51 @@ function showWarning(kind, message) {
   if (warningKind === "account") return;
   if (warningKind === "message" && kind !== "account") return;
   warningKind = kind;
+  versionNotesScreen.hidden = true;
   document.querySelector("#warningTitle").textContent = kind === "account" ? "Account deleted" : "Message deleted";
   warningText.textContent = message;
   warningAction.textContent = kind === "account" ? "Return to sign in" : "I understand";
   warningScreen.hidden = false;
   warningAction.focus();
+}
+
+function hasSeenCurrentVersionNotes() {
+  try {
+    return localStorage.getItem(VERSION_NOTES_STORAGE_KEY) === APP_VERSION;
+  } catch (error) {
+    return true;
+  }
+}
+
+function markCurrentVersionNotesSeen() {
+  try {
+    localStorage.setItem(VERSION_NOTES_STORAGE_KEY, APP_VERSION);
+  } catch (error) {}
+}
+
+function maybeShowVersionNotes() {
+  if (!currentUser || !warningScreen.hidden || warningKind) return;
+  if (hasSeenCurrentVersionNotes()) return;
+  const notes = VERSION_NOTES[APP_VERSION] || [];
+  if (!notes.length) {
+    markCurrentVersionNotesSeen();
+    return;
+  }
+  document.querySelector("#versionNotesTitle").textContent = `What's new in v${APP_VERSION}`;
+  const list = document.querySelector("#versionNotesList");
+  list.replaceChildren();
+  for (const note of notes) {
+    const item = document.createElement("li");
+    item.textContent = note;
+    list.append(item);
+  }
+  versionNotesScreen.hidden = false;
+  document.querySelector("#versionNotesAction").focus();
+}
+
+function dismissVersionNotes() {
+  markCurrentVersionNotesSeen();
+  versionNotesScreen.hidden = true;
 }
 
 function linkHref(value) {
@@ -467,16 +674,147 @@ function fillRichText(element, text, { images = true } = {}) {
   if (cursor < text.length) element.append(document.createTextNode(text.slice(cursor)));
 }
 
+function nextPendingMessageId() {
+  return `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function sendFailureLabel(error) {
+  if (error?.status === 400) return "Couldn't send, inappropriate language";
+  return "Couldn't send, try again";
+}
+
+function createSendErrorStatus(label) {
+  const status = document.createElement("p");
+  status.className = "message-send-error";
+  status.setAttribute("role", "status");
+  const mark = document.createElement("span");
+  mark.className = "message-send-error-mark";
+  mark.setAttribute("aria-hidden", "true");
+  mark.textContent = "!";
+  const text = document.createElement("span");
+  text.className = "message-send-error-text";
+  text.textContent = label;
+  status.append(mark, text);
+  return status;
+}
+
+function markMessageSendFailed(article, label = "Couldn't send, inappropriate language") {
+  if (!article) return;
+  article.classList.add("message-failed");
+  article.classList.remove("message-pending");
+  article.querySelector(".message-reply")?.remove();
+  let status = article.querySelector(".message-send-error");
+  if (!status) {
+    status = createSendErrorStatus(label);
+    article.querySelector(".message-content")?.append(status);
+  } else {
+    const text = status.querySelector(".message-send-error-text");
+    if (text) text.textContent = label;
+  }
+}
+
+function promotePendingMessage(container, pendingId, realId) {
+  const article = container.querySelector(`[data-message-id="${pendingId}"]`);
+  if (!article || realId == null) return;
+  const realKey = String(realId);
+  const existing = container.querySelector(`[data-message-id="${realKey}"]`);
+  if (existing && existing !== article) {
+    article.remove();
+    return;
+  }
+  article.dataset.messageId = realKey;
+  article.classList.remove("message-pending");
+}
+
+function closeMessageMenu() {
+  if (!openMessageMenu) return;
+  openMessageMenu.button.setAttribute("aria-expanded", "false");
+  openMessageMenu.menu.hidden = true;
+  openMessageMenu = null;
+}
+
+function createMessageActions(message, { onReply, onEdit, canEdit }) {
+  const wrap = document.createElement("div");
+  wrap.className = "message-actions";
+  const button = document.createElement("button");
+  button.className = "message-menu-button";
+  button.type = "button";
+  button.setAttribute("aria-label", "Message actions");
+  button.setAttribute("aria-haspopup", "menu");
+  button.setAttribute("aria-expanded", "false");
+  button.innerHTML = '<span aria-hidden="true">···</span>';
+  const menu = document.createElement("div");
+  menu.className = "message-menu";
+  menu.setAttribute("role", "menu");
+  menu.hidden = true;
+
+  const replyItem = document.createElement("button");
+  replyItem.className = "message-menu-item";
+  replyItem.type = "button";
+  replyItem.setAttribute("role", "menuitem");
+  replyItem.textContent = "Reply";
+  replyItem.addEventListener("click", event => {
+    event.stopPropagation();
+    closeMessageMenu();
+    onReply(message);
+  });
+  menu.append(replyItem);
+
+  if (canEdit) {
+    const editItem = document.createElement("button");
+    editItem.className = "message-menu-item";
+    editItem.type = "button";
+    editItem.setAttribute("role", "menuitem");
+    editItem.textContent = "Edit";
+    editItem.addEventListener("click", event => {
+      event.stopPropagation();
+      closeMessageMenu();
+      onEdit(message);
+    });
+    menu.append(editItem);
+  }
+
+  button.addEventListener("click", event => {
+    event.stopPropagation();
+    const willOpen = menu.hidden;
+    closeMessageMenu();
+    if (!willOpen) return;
+    menu.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    openMessageMenu = { button, menu };
+  });
+
+  wrap.append(button, menu);
+  return wrap;
+}
+
+function syncComposerMode({ isDm = false } = {}) {
+  if (isDm) {
+    const editing = Boolean(editingDmMessage);
+    dmReplyPreviewLabel.textContent = editing ? "Editing message" : "Replying to";
+    dmSendButton.innerHTML = editing
+      ? 'Save <span aria-hidden="true">✓</span>'
+      : 'Send <span aria-hidden="true">↗</span>';
+    return;
+  }
+  const editing = Boolean(editingMessage);
+  replyPreviewLabel.textContent = editing ? "Editing message" : "Replying to";
+  sendButton.innerHTML = editing
+    ? 'Save <span aria-hidden="true">✓</span>'
+    : 'Send <span aria-hidden="true">↗</span>';
+}
+
 function addMessage(message) {
   const article = document.createElement("article");
   article.className = "message";
+  if (message.pending) article.classList.add("message-pending");
+  if (message.send_error) article.classList.add("message-failed");
   article.dataset.messageId = message.id;
+  const deleted = message.username === "[DELETED]";
   const avatar = document.createElement("div");
   avatar.className = "message-avatar";
-  avatar.classList.toggle("own", message.is_own && message.username !== "[DELETED]");
-  avatar.classList.toggle("deleted", message.username === "[DELETED]");
-  avatar.textContent = message.username === "[DELETED]" ? "?" : message.username[0];
   avatar.setAttribute("aria-hidden", "true");
+  fillAvatarElement(avatar, message, { own: message.is_own, deleted });
 
   const content = document.createElement("div");
   content.className = "message-content";
@@ -484,7 +822,7 @@ function addMessage(message) {
   meta.className = "message-meta";
   const author = document.createElement("span");
   author.className = "message-author";
-  author.classList.toggle("deleted", message.username === "[DELETED]");
+  author.classList.toggle("deleted", deleted);
   author.textContent = message.username;
   const time = document.createElement("time");
   time.className = "message-time";
@@ -499,15 +837,22 @@ function addMessage(message) {
   }
 
   meta.append(author, time);
+  if (message.edited && !message.is_deleted && !deleted) {
+    const edited = document.createElement("span");
+    edited.className = "message-edited";
+    edited.textContent = "edited";
+    meta.append(edited);
+  }
   content.append(meta, text);
-  if (!message.is_deleted && message.username !== "[DELETED]") {
-    const replyButton = document.createElement("button");
-    replyButton.className = "message-reply";
-    replyButton.type = "button";
-    replyButton.textContent = "Reply";
-    replyButton.setAttribute("aria-label", `Reply to ${message.username}'s message`);
-    replyButton.addEventListener("click", () => selectReply(message));
-    meta.append(replyButton);
+  if (message.send_error) {
+    content.append(createSendErrorStatus(message.send_error));
+  } else if (!message.pending && !message.is_deleted && message.username !== "[DELETED]") {
+    const canEdit = Boolean(message.is_own) && Number.isInteger(message.id);
+    meta.append(createMessageActions(message, {
+      canEdit,
+      onReply: selectReply,
+      onEdit: selectEdit,
+    }));
   }
   article.append(avatar, content);
   const existing = feed.querySelector(`[data-message-id="${message.id}"]`);
@@ -527,6 +872,7 @@ function createReplyQuote(replyTo) {
 }
 
 function selectReply(message) {
+  clearEdit();
   replyingTo = {
     id: message.id,
     username: message.username,
@@ -535,16 +881,53 @@ function selectReply(message) {
   replyPreviewText.textContent = `${replyingTo.username}: ${replyingTo.text}`;
   replyPreview.hidden = false;
   messageError.hidden = true;
+  syncComposerMode();
   messageInput.focus();
 }
 
 function clearReply() {
   replyingTo = null;
-  replyPreview.hidden = true;
-  replyPreviewText.textContent = "";
+  if (!editingMessage) {
+    replyPreview.hidden = true;
+    replyPreviewText.textContent = "";
+    syncComposerMode();
+  }
+}
+
+function selectEdit(message) {
+  if (!message?.is_own || !Number.isInteger(message.id)) return;
+  clearReply();
+  editingMessage = {
+    id: message.id,
+    username: message.username,
+    text: message.text,
+    created_at: message.created_at,
+    reply_to: message.reply_to || null,
+    edited: Boolean(message.edited),
+  };
+  replyPreviewText.textContent = message.text;
+  replyPreview.hidden = false;
+  messageError.hidden = true;
+  messageInput.value = message.text;
+  messageInput.style.height = "auto";
+  messageInput.style.height = `${Math.min(messageInput.scrollHeight, 110)}px`;
+  sendButton.disabled = !messageInput.value.trim();
+  syncComposerMode();
+  messageInput.focus();
+  messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
+}
+
+function clearEdit() {
+  editingMessage = null;
+  if (!replyingTo) {
+    replyPreview.hidden = true;
+    replyPreviewText.textContent = "";
+  }
+  syncComposerMode();
 }
 
 function selectDmReply(message) {
+  clearDmEdit();
   replyingToDm = {
     id: message.id,
     username: message.username,
@@ -552,13 +935,52 @@ function selectDmReply(message) {
   };
   dmReplyPreviewText.textContent = `${replyingToDm.username}: ${replyingToDm.text}`;
   dmReplyPreview.hidden = false;
+  syncComposerMode({ isDm: true });
   dmMessageInput.focus();
 }
 
 function clearDmReply() {
   replyingToDm = null;
-  dmReplyPreview.hidden = true;
-  dmReplyPreviewText.textContent = "";
+  if (!editingDmMessage) {
+    dmReplyPreview.hidden = true;
+    dmReplyPreviewText.textContent = "";
+    syncComposerMode({ isDm: true });
+  }
+}
+
+function selectDmEdit(message) {
+  if (!message?.is_own || !Number.isInteger(message.id) || !selectedDmUser) return;
+  clearDmReply();
+  editingDmMessage = {
+    id: message.id,
+    username: message.username,
+    text: message.text,
+    created_at: message.created_at,
+    reply_to: message.reply_to || null,
+    edited: Boolean(message.edited),
+    avatar_url: message.avatar_url || null,
+    animal_username: message.animal_username || currentUser?.username || null,
+    display_name: message.display_name || null,
+  };
+  dmReplyPreviewText.textContent = message.text;
+  dmReplyPreview.hidden = false;
+  dmMessageError.hidden = true;
+  dmMessageInput.value = message.text;
+  dmMessageInput.style.height = "auto";
+  dmMessageInput.style.height = `${Math.min(dmMessageInput.scrollHeight, 110)}px`;
+  dmSendButton.disabled = !dmMessageInput.value.trim();
+  syncComposerMode({ isDm: true });
+  dmMessageInput.focus();
+  dmMessageInput.setSelectionRange(dmMessageInput.value.length, dmMessageInput.value.length);
+}
+
+function clearDmEdit() {
+  editingDmMessage = null;
+  if (!replyingToDm) {
+    dmReplyPreview.hidden = true;
+    dmReplyPreviewText.textContent = "";
+  }
+  syncComposerMode({ isDm: true });
 }
 
 function scrollToLatestMessage(behavior = "smooth", targetFeed = feed) {
@@ -572,17 +994,34 @@ function scrollToLatestMessage(behavior = "smooth", targetFeed = feed) {
   document.fonts?.ready.then(scroll);
 }
 
+function startPolling() {
+  clearInterval(pollingTimer);
+  const tick = () => {
+    loadMessages();
+    if (activeView === "dms") {
+      loadDmContacts();
+      loadDmMessages();
+    }
+  };
+  tick();
+  const interval = document.visibilityState === "visible" ? POLL_VISIBLE_MS : POLL_HIDDEN_MS;
+  pollingTimer = setInterval(tick, interval);
+}
+
 async function loadMessages() {
-  if (!currentUser) return;
+  if (!currentUser || messagesLoading) return;
+  messagesLoading = true;
   try {
     const data = await api(`/api/messages?after=${messageCursor}`);
     const messages = data.messages || [];
     const initialLoad = messageCursor === 0;
     if (initialLoad && !messages.length) {
-      const empty = document.createElement("div");
-      empty.className = "empty-state";
-      empty.textContent = "It's quiet in here.";
-      feed.replaceChildren(empty);
+      if (!feed.querySelector(".message")) {
+        const empty = document.createElement("div");
+        empty.className = "empty-state";
+        empty.textContent = "It's quiet in here.";
+        feed.replaceChildren(empty);
+      }
       messageCursor = data.cursor || 0;
     } else {
       for (const message of messages) {
@@ -602,7 +1041,13 @@ async function loadMessages() {
       }
     }
     await syncReadState(data.unread);
-    if (document.visibilityState === "visible") reportPresence(true);
+    if (document.visibilityState === "visible") {
+      const now = Date.now();
+      if (now - presenceLastSentAt >= PRESENCE_MIN_INTERVAL_MS) {
+        presenceLastSentAt = now;
+        reportPresence(true);
+      }
+    }
   } catch (error) {
     if (error.accountDeleted) {
       showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
@@ -611,6 +1056,7 @@ async function loadMessages() {
     }
   } finally {
     feed.querySelector(".loading-indicator")?.remove();
+    messagesLoading = false;
   }
 }
 
@@ -628,32 +1074,11 @@ async function initialize() {
       setAuthMode("create");
       updateAppBadge(0);
     }
-    if (warningScreen.hidden) showWhatsNew();
   } catch {
     authError.textContent = "Could not reach the chat server. Refresh to try again.";
     authError.hidden = false;
   } finally {
     appLoading.hidden = true;
-  }
-}
-
-function showWhatsNew() {
-  const seenVersionKey = "pigin-whats-new-version";
-  try {
-    if (localStorage.getItem(seenVersionKey) === whatsNewVersion) return;
-  } catch {
-    // Keep the release note available when browser storage is blocked.
-  }
-  whatsNewScreen.hidden = false;
-  whatsNewDismiss.focus();
-}
-
-function dismissWhatsNew() {
-  whatsNewScreen.hidden = true;
-  try {
-    localStorage.setItem("pigin-whats-new-version", whatsNewVersion);
-  } catch {
-    // The release note is dismissed for this visit when storage is blocked.
   }
 }
 
@@ -667,40 +1092,112 @@ function showDmError(message) {
   dmError.hidden = !message;
 }
 
+function createDmPersonButton(person, { preview = "", active = false, onClick }) {
+  const button = document.createElement("button");
+  button.className = "dm-contact";
+  button.type = "button";
+  button.classList.toggle("active", active);
+  button.dataset.accountId = String(person.id);
+  button.setAttribute("aria-pressed", String(active));
+  const avatar = document.createElement("div");
+  avatar.className = "dm-contact-avatar message-avatar";
+  avatar.setAttribute("aria-hidden", "true");
+  fillAvatarElement(avatar, person);
+  const copy = document.createElement("span");
+  copy.className = "dm-contact-copy";
+  const name = document.createElement("span");
+  name.className = "dm-contact-name";
+  name.textContent = person.username;
+  const previewEl = document.createElement("span");
+  previewEl.className = "dm-contact-preview";
+  previewEl.textContent = preview || person.animal_username || "Start a conversation";
+  copy.append(name, previewEl);
+  const dot = document.createElement("span");
+  dot.className = "unread-dot";
+  dot.setAttribute("aria-hidden", "true");
+  button.append(avatar, copy, dot);
+  button.addEventListener("click", onClick);
+  return button;
+}
+
 function renderDmContacts(contacts) {
   dmContacts.replaceChildren();
   if (!contacts.length) {
     const empty = document.createElement("p");
     empty.className = "dm-contact-empty";
-    empty.textContent = "There are no other room members yet.";
+    empty.textContent = "No conversations yet. Search for a username above to start one.";
     dmContacts.append(empty);
     return;
   }
   for (const contact of contacts) {
-    const button = document.createElement("button");
-    button.className = "dm-contact";
-    button.type = "button";
-    button.classList.toggle("active", selectedDmUser?.id === contact.id);
-    button.dataset.accountId = String(contact.id);
-    button.setAttribute("aria-pressed", String(selectedDmUser?.id === contact.id));
-    const name = document.createElement("span");
-    name.className = "dm-contact-name";
-    name.textContent = contact.username;
-    const preview = document.createElement("span");
-    preview.className = "dm-contact-preview";
-    preview.textContent = contact.last_message || "Start a conversation";
-    const dot = document.createElement("span");
-    dot.className = "unread-dot";
-    dot.setAttribute("aria-hidden", "true");
-    button.append(name, preview, dot);
-    button.addEventListener("click", () => selectDmContact(contact));
-    dmContacts.append(button);
+    dmContacts.append(createDmPersonButton(contact, {
+      preview: contact.last_message || "Conversation",
+      active: selectedDmUser?.id === contact.id,
+      onClick: () => selectDmContact(contact),
+    }));
   }
   updateDmUnreadDots();
 }
 
+function clearDmSearchResults() {
+  const results = document.querySelector("#dmSearchResults");
+  results.hidden = true;
+  results.replaceChildren();
+}
+
+function renderDmSearchResults(people, query) {
+  const results = document.querySelector("#dmSearchResults");
+  results.replaceChildren();
+  if (!query) {
+    results.hidden = true;
+    return;
+  }
+  results.hidden = false;
+  if (!people.length) {
+    const empty = document.createElement("p");
+    empty.className = "dm-search-empty";
+    empty.textContent = `No one matched “${query}”. Try a display name, or an animal name if they haven’t set one.`;
+    results.append(empty);
+    return;
+  }
+  for (const person of people) {
+    results.append(createDmPersonButton(person, {
+      preview: "Start a conversation",
+      active: selectedDmUser?.id === person.id,
+      onClick: () => {
+        document.querySelector("#dmSearchInput").value = "";
+        clearDmSearchResults();
+        selectDmContact(person);
+      },
+    }));
+  }
+}
+
+let dmSearchTimer = 0;
+async function searchDmPeople(query) {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    clearDmSearchResults();
+    return;
+  }
+  try {
+    const data = await api(`/api/dms/search?q=${encodeURIComponent(trimmed)}`);
+    renderDmSearchResults(data.results || [], trimmed);
+    showDmError("");
+  } catch (error) {
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      showDmError(error.message);
+    }
+  }
+}
+
 async function loadDmContacts() {
-  if (!currentUser) return;
+  if (!currentUser || dmContactsLoading) return;
+  dmContactsLoading = true;
   const showLoader = !dmContactsSnapshot;
   if (showLoader) dmContacts.replaceChildren(createLoadingIndicator("Loading conversations"));
   try {
@@ -737,6 +1234,7 @@ async function loadDmContacts() {
     }
   } finally {
     if (showLoader) dmContacts.querySelector(".loading-indicator")?.remove();
+    dmContactsLoading = false;
   }
 }
 
@@ -755,14 +1253,17 @@ function showDmConversationPage() {
 function resetDmConversationPane() {
   selectedDmUser = null;
   dmMessageCursor = 0;
+  dmPollSince = "";
   clearDmReply();
+  clearDmEdit();
+  closeMessageMenu();
   dmFeed.replaceChildren();
   const empty = document.createElement("div");
   empty.className = "empty-state";
   empty.textContent = "Your private conversations will appear here.";
   dmFeed.append(empty);
   document.querySelector("#dmConversationTitle").textContent = "Choose someone to message";
-  document.querySelector("#dmConversationSubtitle").textContent = "Select a room member to start a private conversation.";
+  document.querySelector("#dmConversationSubtitle").textContent = "Search for a username or open an existing conversation.";
   dmMessageInput.value = "";
   dmMessageInput.disabled = true;
   dmMessageInput.style.height = "34px";
@@ -770,19 +1271,24 @@ function resetDmConversationPane() {
   dmSendButton.disabled = true;
   dmMessageError.hidden = true;
   syncDmEmojiButtons();
+  clearDmSearchResults();
   showDmContactsPage();
 }
 
 function selectDmContact(contact) {
   selectedDmUser = contact;
   dmMessageCursor = 0;
+  dmPollSince = "";
   clearDmReply();
+  clearDmEdit();
+  closeMessageMenu();
   dmFeed.replaceChildren();
   dmMessageInput.value = "";
   dmMessageInput.style.height = "34px";
   dmMessageInput.disabled = false;
   dmMessageInput.placeholder = `Message ${contact.username}...`;
   dmSendButton.disabled = true;
+  syncComposerMode({ isDm: true });
   syncDmEmojiButtons();
   document.querySelector("#dmConversationTitle").textContent = contact.username;
   document.querySelector("#dmConversationSubtitle").textContent = "Private conversation";
@@ -797,12 +1303,13 @@ function selectDmContact(contact) {
 function addDmMessage(message) {
   const article = document.createElement("article");
   article.className = "message";
+  if (message.pending) article.classList.add("message-pending");
+  if (message.send_error) article.classList.add("message-failed");
   article.dataset.messageId = message.id;
   const avatar = document.createElement("div");
   avatar.className = "message-avatar";
-  avatar.classList.toggle("own", message.is_own);
-  avatar.textContent = message.username[0];
   avatar.setAttribute("aria-hidden", "true");
+  fillAvatarElement(avatar, message, { own: message.is_own });
 
   const content = document.createElement("div");
   content.className = "message-content";
@@ -820,16 +1327,22 @@ function addDmMessage(message) {
   fillRichText(text, message.text);
   if (message.reply_to) content.append(createReplyQuote(message.reply_to));
   meta.append(author, time);
-  if (message.reply_to !== undefined && message.username) {
-    const replyButton = document.createElement("button");
-    replyButton.className = "message-reply";
-    replyButton.type = "button";
-    replyButton.textContent = "Reply";
-    replyButton.setAttribute("aria-label", `Reply to ${message.username}'s message`);
-    replyButton.addEventListener("click", () => selectDmReply(message));
-    meta.append(replyButton);
+  if (message.edited) {
+    const edited = document.createElement("span");
+    edited.className = "message-edited";
+    edited.textContent = "edited";
+    meta.append(edited);
+  }
+  if (!message.pending && !message.send_error && message.reply_to !== undefined && message.username) {
+    const canEdit = Boolean(message.is_own) && Number.isInteger(message.id);
+    meta.append(createMessageActions(message, {
+      canEdit,
+      onReply: selectDmReply,
+      onEdit: selectDmEdit,
+    }));
   }
   content.append(meta, text);
+  if (message.send_error) content.append(createSendErrorStatus(message.send_error));
   article.append(avatar, content);
   const existing = dmFeed.querySelector(`[data-message-id="${message.id}"]`);
   if (existing) existing.replaceWith(article);
@@ -837,29 +1350,40 @@ function addDmMessage(message) {
 }
 
 async function loadDmMessages() {
-  if (!currentUser || !selectedDmUser) return;
+  if (!currentUser || !selectedDmUser || dmMessagesLoading) return;
   const accountId = selectedDmUser.id;
+  dmMessagesLoading = true;
   const showLoader = dmMessageCursor === 0 && !dmFeed.children.length;
   if (showLoader) dmFeed.append(createLoadingIndicator("Loading messages"));
   try {
-    const data = await api(`/api/dms/${accountId}?after=${dmMessageCursor}`);
+    const sinceQuery = dmMessageCursor && dmPollSince
+      ? `&since=${encodeURIComponent(dmPollSince)}`
+      : "";
+    const data = await api(`/api/dms/${accountId}?after=${dmMessageCursor}${sinceQuery}`);
     if (selectedDmUser?.id !== accountId) return;
     const messages = data.messages || [];
     const initialLoad = dmMessageCursor === 0;
     if (initialLoad && !messages.length) {
-      const empty = document.createElement("div");
-      empty.className = "empty-state";
-      empty.textContent = "No messages yet. Say hello!";
-      dmFeed.replaceChildren(empty);
+      if (!dmFeed.querySelector(".message")) {
+        const empty = document.createElement("div");
+        empty.className = "empty-state";
+        empty.textContent = "No messages yet. Say hello!";
+        dmFeed.replaceChildren(empty);
+      }
     }
     for (const message of messages) {
       dmFeed.querySelector(".empty-state")?.remove();
       addDmMessage(message);
     }
+    const previousCursor = dmMessageCursor;
     dmMessageCursor = Math.max(dmMessageCursor, data.cursor || 0);
+    if (data.server_time) dmPollSince = data.server_time;
     if (messages.length) {
       const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth", dmFeed);
+      const onlyEdits = !initialLoad && messages.every(message => message.id <= previousCursor);
+      if (!onlyEdits) {
+        scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth", dmFeed);
+      }
     }
     showDmError("");
   } catch (error) {
@@ -874,6 +1398,7 @@ async function loadDmMessages() {
     if (selectedDmUser?.id === accountId && showLoader) {
       dmFeed.querySelector(".loading-indicator")?.remove();
     }
+    dmMessagesLoading = false;
   }
 }
 
@@ -909,10 +1434,11 @@ async function loadAdminData() {
       copy.className = "admin-row-copy";
       const title = document.createElement("div");
       title.className = "admin-row-title";
-      title.textContent = account.username;
+      title.textContent = account.public_name || account.username;
       const detail = document.createElement("div");
       detail.className = "admin-row-detail";
-      detail.textContent = `${account.role === "admin" ? "Admin" : "Member"} · ${account.message_count} messages · joined ${formatAdminTime(account.created_at)}`;
+      const animalLabel = account.display_name ? ` · animal ${account.username}` : "";
+      detail.textContent = `${account.role === "admin" ? "Admin" : "Member"}${animalLabel} · ${account.message_count} messages · joined ${formatAdminTime(account.created_at)}`;
       copy.append(title, detail);
       row.append(copy);
       if (account.username !== "Cricket" && account.role !== "admin") {
@@ -921,7 +1447,7 @@ async function loadAdminData() {
         button.type = "button";
         button.textContent = "Delete account";
         button.addEventListener("click", async () => {
-          if (!window.confirm(`Delete ${account.username} and mark all of their messages [DELETED]?`)) return;
+          if (!window.confirm(`Delete ${account.public_name || account.username} and mark all of their messages [DELETED]?`)) return;
           button.disabled = true;
           try {
             await api(`/api/admin/accounts/${account.id}`, { method: "DELETE" });
@@ -1300,6 +1826,7 @@ function setRoomView(view) {
     loadDmMessages();
   }
   if (showAdmin) loadAdminData();
+  if (showSettings) refreshProfileSettings();
   if (showChat || showDms) syncReadState(unreadState, true);
   setMenuOpen(false);
 }
@@ -1310,6 +1837,45 @@ chatTab.addEventListener("click", () => setRoomView("chat"));
 dmTab.addEventListener("click", () => setRoomView("dms"));
 settingsTab.addEventListener("click", () => setRoomView("settings"));
 adminTab.addEventListener("click", () => setRoomView("admin"));
+document.querySelector("#displayNameForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const saveButton = document.querySelector("#saveDisplayName");
+  saveButton.disabled = true;
+  showProfileError("");
+  try {
+    const data = await api("/api/profile", {
+      method: "PATCH",
+      body: JSON.stringify({ display_name: document.querySelector("#displayNameInput").value }),
+    });
+    applyCurrentUser(data.user);
+  } catch (error) {
+    showProfileError(error.message);
+  } finally {
+    saveButton.disabled = false;
+  }
+});
+document.querySelector("#avatarInput").addEventListener("change", async event => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  showProfileError("");
+  try {
+    const prepared = await prepareAvatarUpload(file);
+    const data = await uploadAvatarFile(prepared);
+    applyCurrentUser(data.user);
+  } catch (error) {
+    showProfileError(error.message);
+  }
+});
+document.querySelector("#removeAvatarButton").addEventListener("click", async () => {
+  showProfileError("");
+  try {
+    const data = await api("/api/profile/avatar", { method: "DELETE" });
+    applyCurrentUser(data.user);
+  } catch (error) {
+    showProfileError(error.message);
+  }
+});
 dmBackButton.addEventListener("click", () => {
   resetDmConversationPane();
   renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
@@ -1331,7 +1897,6 @@ compactMenu.addEventListener("change", event => {
 });
 updateMenuButton();
 applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
-whatsNewDismiss.addEventListener("click", dismissWhatsNew);
 window.visualViewport?.addEventListener("resize", fitAppToViewport);
 window.visualViewport?.addEventListener("scroll", () => {
   fitAppToViewport();
@@ -1342,6 +1907,16 @@ document.querySelector("#dmRefresh").addEventListener("click", () => {
   dmContactsSnapshot = "";
   loadDmContacts();
   loadDmMessages();
+});
+document.querySelector("#dmSearchForm").addEventListener("submit", event => {
+  event.preventDefault();
+  clearTimeout(dmSearchTimer);
+  searchDmPeople(document.querySelector("#dmSearchInput").value);
+});
+document.querySelector("#dmSearchInput").addEventListener("input", event => {
+  clearTimeout(dmSearchTimer);
+  const value = event.target.value;
+  dmSearchTimer = window.setTimeout(() => searchDmPeople(value), 200);
 });
 warningAction.addEventListener("click", async () => {
   const kind = warningKind;
@@ -1360,10 +1935,12 @@ warningAction.addEventListener("click", async () => {
     currentUser.warning_count = 0;
     warningKind = null;
     warningScreen.hidden = true;
+    maybeShowVersionNotes();
   } catch (error) {
     showWarning("account", error.message);
   }
 });
+document.querySelector("#versionNotesAction").addEventListener("click", dismissVersionNotes);
 accountForm.addEventListener("submit", async event => {
   event.preventDefault();
   authError.hidden = true;
@@ -1430,6 +2007,8 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", event => {
     if (!currentUser || !event.data) return;
     if (event.data.type === "unread-refresh") {
+      if (event.data.unread) applyUnread(event.data.unread);
+      if (event.data.source === "read-sync") closeAppNotifications();
       loadMessages();
       if (activeView === "dms") {
         loadDmContacts();
@@ -1445,11 +2024,13 @@ if ("serviceWorker" in navigator) {
 
 document.addEventListener("visibilitychange", () => {
   const visible = document.visibilityState === "visible";
+  if (visible) presenceLastSentAt = 0;
   reportPresence(visible);
-  if (!visible || !currentUser) return;
+  if (!currentUser) return;
+  startPolling();
+  if (!visible) return;
   closeAppNotifications();
   syncReadState(unreadState, true);
-  loadMessages();
 });
 
 window.addEventListener("pagehide", () => {
@@ -1478,31 +2059,129 @@ messageInput.addEventListener("input", () => {
   messageInput.style.height = `${Math.min(messageInput.scrollHeight, 110)}px`;
   messageError.hidden = true;
 });
-document.querySelector("#cancelReply").addEventListener("click", clearReply);
-document.querySelector("#cancelDmReply").addEventListener("click", clearDmReply);
+document.querySelector("#cancelReply").addEventListener("click", () => {
+  if (editingMessage) {
+    messageInput.value = "";
+    messageInput.style.height = "34px";
+    sendButton.disabled = true;
+    clearEdit();
+    return;
+  }
+  clearReply();
+});
+document.querySelector("#cancelDmReply").addEventListener("click", () => {
+  if (editingDmMessage) {
+    dmMessageInput.value = "";
+    dmMessageInput.style.height = "34px";
+    dmSendButton.disabled = true;
+    clearDmEdit();
+    return;
+  }
+  clearDmReply();
+});
 document.querySelector("#messageForm").addEventListener("submit", async event => {
   event.preventDefault();
   const text = messageInput.value.trim();
-  if (!text || sendButton.disabled) return;
-  sendButton.disabled = true;
-  try {
-    const payload = { text };
-    if (replyingTo) payload.reply_to_id = replyingTo.id;
-    await api("/api/messages", { method: "POST", body: JSON.stringify(payload) });
+  if (!text || sendButton.disabled || !currentUser) return;
+
+  if (editingMessage) {
+    const editSnapshot = editingMessage;
+    if (text === editSnapshot.text) {
+      messageInput.value = "";
+      messageInput.style.height = "34px";
+      clearEdit();
+      sendButton.disabled = true;
+      return;
+    }
+    const previous = { ...editSnapshot };
     messageInput.value = "";
     messageInput.style.height = "34px";
-    clearReply();
+    clearEdit();
     messageError.hidden = true;
-    await loadMessages();
-    scrollToLatestMessage();
+    sendButton.disabled = true;
+    addMessage({
+      id: editSnapshot.id,
+      username: currentUser.username,
+      animal_username: currentUser.username,
+      display_name: null,
+      avatar_url: null,
+      text,
+      created_at: editSnapshot.created_at,
+      is_own: true,
+      is_deleted: false,
+      edited: true,
+      reply_to: editSnapshot.reply_to,
+    });
+    try {
+      await api(`/api/messages/${editSnapshot.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ text }),
+      });
+      loadMessages().catch(() => {});
+    } catch (error) {
+      addMessage({
+        id: previous.id,
+        username: currentUser.username,
+        animal_username: currentUser.username,
+        display_name: null,
+        avatar_url: null,
+        text: previous.text,
+        created_at: previous.created_at,
+        is_own: true,
+        is_deleted: false,
+        edited: Boolean(previous.edited),
+        reply_to: previous.reply_to,
+        send_error: sendFailureLabel(error),
+      });
+      if (error.accountDeleted) {
+        showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+      } else if (error.status === 401) {
+        showLogin();
+      }
+    } finally {
+      sendButton.disabled = !messageInput.value.trim();
+    }
+    return;
+  }
+
+  const replySnapshot = replyingTo;
+  const pendingId = nextPendingMessageId();
+  const optimistic = {
+    id: pendingId,
+    username: currentUser.username,
+    animal_username: currentUser.username,
+    display_name: null,
+    avatar_url: null,
+    text,
+    created_at: new Date().toISOString(),
+    is_own: true,
+    is_deleted: false,
+    reply_to: replySnapshot
+      ? { id: replySnapshot.id, username: replySnapshot.username, text: replySnapshot.text }
+      : null,
+    pending: true,
+  };
+  messageInput.value = "";
+  messageInput.style.height = "34px";
+  clearReply();
+  messageError.hidden = true;
+  sendButton.disabled = true;
+  feed.querySelector(".empty-state")?.remove();
+  addMessage(optimistic);
+  scrollToLatestMessage("auto");
+  try {
+    const payload = { text };
+    if (replySnapshot) payload.reply_to_id = replySnapshot.id;
+    const result = await api("/api/messages", { method: "POST", body: JSON.stringify(payload) });
+    promotePendingMessage(feed, pendingId, result.id);
+    loadMessages().catch(() => {});
   } catch (error) {
     if (error.accountDeleted) {
       showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
     } else if (error.status === 401) {
       showLogin();
     } else {
-      messageError.textContent = error.message;
-      messageError.hidden = false;
+      markMessageSendFailed(feed.querySelector(`[data-message-id="${pendingId}"]`), sendFailureLabel(error));
     }
   } finally {
     sendButton.disabled = !messageInput.value.trim();
@@ -1517,34 +2196,124 @@ dmMessageInput.addEventListener("input", () => {
 document.querySelector("#dmMessageForm").addEventListener("submit", async event => {
   event.preventDefault();
   const text = dmMessageInput.value.trim();
-  if (!text || !selectedDmUser || dmSendButton.disabled) return;
-  dmSendButton.disabled = true;
+  if (!text || !selectedDmUser || dmSendButton.disabled || !currentUser) return;
+
+  if (editingDmMessage) {
+    const editSnapshot = editingDmMessage;
+    const partnerId = selectedDmUser.id;
+    if (text === editSnapshot.text) {
+      dmMessageInput.value = "";
+      dmMessageInput.style.height = "34px";
+      clearDmEdit();
+      dmSendButton.disabled = true;
+      return;
+    }
+    const previous = { ...editSnapshot };
+    dmMessageInput.value = "";
+    dmMessageInput.style.height = "34px";
+    clearDmEdit();
+    dmMessageError.hidden = true;
+    dmSendButton.disabled = true;
+    addDmMessage({
+      id: editSnapshot.id,
+      username: publicNameFor(currentUser),
+      animal_username: currentUser.username,
+      display_name: currentUser.display_name || null,
+      avatar_url: currentUser.avatar_url || null,
+      text,
+      created_at: editSnapshot.created_at,
+      is_own: true,
+      edited: true,
+      reply_to: editSnapshot.reply_to,
+    });
+    try {
+      await api(`/api/dms/${partnerId}/messages/${editSnapshot.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ text }),
+      });
+      if (selectedDmUser?.id === partnerId) loadDmMessages().catch(() => {});
+      dmContactsSnapshot = "";
+      loadDmContacts().catch(() => {});
+    } catch (error) {
+      if (selectedDmUser?.id === partnerId) {
+        addDmMessage({
+          id: previous.id,
+          username: publicNameFor(currentUser),
+          animal_username: currentUser.username,
+          display_name: currentUser.display_name || null,
+          avatar_url: currentUser.avatar_url || null,
+          text: previous.text,
+          created_at: previous.created_at,
+          is_own: true,
+          edited: Boolean(previous.edited),
+          reply_to: previous.reply_to,
+          send_error: sendFailureLabel(error),
+        });
+      }
+      if (error.accountDeleted) {
+        showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+      } else if (error.status === 401) {
+        showLogin();
+      }
+    } finally {
+      dmSendButton.disabled = !selectedDmUser || !dmMessageInput.value.trim();
+    }
+    return;
+  }
+
+  const partnerId = selectedDmUser.id;
+  const replySnapshot = replyingToDm;
+  const pendingId = nextPendingMessageId();
+  const optimistic = {
+    id: pendingId,
+    username: publicNameFor(currentUser),
+    animal_username: currentUser.username,
+    display_name: currentUser.display_name || null,
+    avatar_url: currentUser.avatar_url || null,
+    text,
+    created_at: new Date().toISOString(),
+    is_own: true,
+    reply_to: replySnapshot
+      ? { id: replySnapshot.id, username: replySnapshot.username, text: replySnapshot.text }
+      : null,
+    pending: true,
+  };
+  dmMessageInput.value = "";
+  dmMessageInput.style.height = "34px";
+  clearDmReply();
   dmMessageError.hidden = true;
+  dmSendButton.disabled = true;
+  dmFeed.querySelector(".empty-state")?.remove();
+  addDmMessage(optimistic);
+  scrollToLatestMessage("auto", dmFeed);
   try {
     const payload = { text };
-    if (replyingToDm) payload.reply_to_id = replyingToDm.id;
-    await api(`/api/dms/${selectedDmUser.id}`, {
+    if (replySnapshot) payload.reply_to_id = replySnapshot.id;
+    const result = await api(`/api/dms/${partnerId}`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    dmMessageInput.value = "";
-    dmMessageInput.style.height = "34px";
-    clearDmReply();
-    dmMessageError.hidden = true;
+    if (selectedDmUser?.id === partnerId) {
+      promotePendingMessage(dmFeed, pendingId, result.id);
+      loadDmMessages().catch(() => {});
+    }
     dmContactsSnapshot = "";
-    await Promise.all([loadDmMessages(), loadDmContacts()]);
+    loadDmContacts().catch(() => {});
   } catch (error) {
     if (error.accountDeleted) {
       showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
     } else if (error.status === 401) {
       showLogin();
-    } else {
-      dmMessageError.textContent = error.message;
-      dmMessageError.hidden = false;
+    } else if (selectedDmUser?.id === partnerId) {
+      markMessageSendFailed(dmFeed.querySelector(`[data-message-id="${pendingId}"]`), sendFailureLabel(error));
     }
   } finally {
     dmSendButton.disabled = !selectedDmUser || !dmMessageInput.value.trim();
   }
+});
+document.addEventListener("click", () => closeMessageMenu());
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") closeMessageMenu();
 });
 dmMessageInput.addEventListener("keydown", event => {
   if (event.key === "Enter" && !event.shiftKey) {

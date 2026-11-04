@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#f6f7f3">
   <script>
     try {
@@ -42,8 +42,8 @@
         <form id="accountForm" data-mode="create">
           <div class="auth-fields">
             <div class="field-group" id="usernameGroup" hidden>
-              <label class="field-label" for="usernameInput">Animal username</label>
-              <input class="auth-input" id="usernameInput" type="text" autocomplete="username" autocapitalize="words" pattern="[A-Za-z]+" maxlength="20" placeholder="Otter">
+              <label class="field-label" for="usernameInput">Username</label>
+              <input class="auth-input" id="usernameInput" type="text" autocomplete="username" autocapitalize="words" maxlength="24" placeholder="Otter or display name">
             </div>
             <div class="field-group">
               <label class="field-label" for="passwordInput">Password</label>
@@ -102,7 +102,7 @@
               <form class="composer" id="messageForm">
                 <div class="reply-preview" id="replyPreview" hidden>
                   <div class="reply-preview-copy">
-                    <strong>Replying to</strong>
+                    <strong id="replyPreviewLabel">Replying to</strong>
                     <span id="replyPreviewText"></span>
                   </div>
                   <button class="reply-cancel" id="cancelReply" type="button">Cancel</button>
@@ -132,11 +132,17 @@
               <div class="dm-sidebar" id="dmSidebar">
                 <header class="dm-list-heading">
                   <div class="dm-list-copy">
-                    <h3>Contacts</h3>
-                    <p>Choose someone to message</p>
+                    <h3>Messages</h3>
+                    <p>People you’ve already texted</p>
                   </div>
                   <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
                 </header>
+                <form class="dm-search" id="dmSearchForm" role="search">
+                  <label class="field-label" for="dmSearchInput">Start a conversation</label>
+                  <input class="auth-input" id="dmSearchInput" type="search" maxlength="24" placeholder="Search display or animal name" autocomplete="off" aria-label="Search for someone to message">
+                  <p class="dm-search-hint">Search a username to message someone new.</p>
+                </form>
+                <div class="dm-search-results" id="dmSearchResults" hidden></div>
                 <nav class="dm-contacts" id="dmContacts" aria-label="Conversations"></nav>
               </div>
               <section class="dm-conversation" id="dmConversation" aria-label="Selected conversation" hidden>
@@ -144,7 +150,7 @@
                   <button class="dm-back" id="dmBackButton" type="button" aria-label="Back to contacts">←</button>
                   <div class="dm-conversation-copy">
                     <h3 id="dmConversationTitle">Choose someone to message</h3>
-                    <p id="dmConversationSubtitle">Select a room member to start a private conversation.</p>
+                    <p id="dmConversationSubtitle">Search for a username or open an existing conversation.</p>
                   </div>
                 </header>
                 <section class="feed dm-feed" id="dmFeed" aria-label="Direct messages" aria-live="polite">
@@ -154,7 +160,7 @@
                   <form class="composer" id="dmMessageForm">
                     <div class="reply-preview" id="dmReplyPreview" hidden>
                       <div class="reply-preview-copy">
-                        <strong>Replying to</strong>
+                        <strong id="dmReplyPreviewLabel">Replying to</strong>
                         <span id="dmReplyPreviewText"></span>
                       </div>
                       <button class="reply-cancel" id="cancelDmReply" type="button">Cancel</button>
@@ -182,6 +188,27 @@
           </section>
           <section class="admin-panel" id="settingsPanel" aria-label="Settings" hidden>
             <div class="settings-list">
+              <div class="settings-profile">
+                <div class="settings-avatar-wrap">
+                  <div class="settings-avatar" id="settingsAvatar" aria-hidden="true">?</div>
+                  <div class="settings-avatar-actions">
+                    <label class="settings-upload">
+                      Change photo
+                      <input id="avatarInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+                    </label>
+                    <button class="settings-link" id="removeAvatarButton" type="button" hidden>Remove photo</button>
+                  </div>
+                </div>
+                <form class="settings-profile-form" id="displayNameForm">
+                  <label class="field-label" for="displayNameInput">Display name</label>
+                  <p class="settings-hint">Shown in DMs only. World Chat stays anonymous as <span id="settingsAnimalName">—</span>. You can still sign in with either name.</p>
+                  <div class="settings-name-row">
+                    <input class="auth-input" id="displayNameInput" type="text" maxlength="24" placeholder="Optional display name" autocomplete="nickname">
+                    <button class="settings-toggle" id="saveDisplayName" type="submit">Save</button>
+                  </div>
+                  <p class="composer-error" id="profileError" role="alert" hidden></p>
+                </form>
+              </div>
               <div class="settings-row">
                 <div class="settings-copy">
                   <h3>Notifications</h3>
@@ -223,13 +250,12 @@
         <button class="login-submit" id="warningAction" type="button">Continue</button>
       </section>
     </div>
-    <div class="whats-new-screen" id="whatsNewScreen" role="dialog" aria-modal="true" aria-labelledby="whatsNewTitle" aria-describedby="whatsNewText" hidden>
-      <section class="whats-new-panel">
-        <img class="whats-new-mark" src="{{ url_for('static', filename='icon-192.png', v='pigin-logo') }}" alt="" width="56" height="56">
-        <p class="whats-new-version">PIGIN v1.12.2</p>
-        <h2 id="whatsNewTitle">What’s new</h2>
-        <p id="whatsNewText">A little pigeon flight keeps you company while PIGIN loads—including chats, DMs, and conversations.</p>
-        <button class="login-submit" id="whatsNewDismiss" type="button">Got it</button>
+    <div class="warning-screen" id="versionNotesScreen" role="dialog" aria-modal="true" aria-labelledby="versionNotesTitle" hidden>
+      <section class="warning-panel version-notes-panel">
+        <p class="version-notes-eyebrow" id="versionNotesEyebrow">What's new</p>
+        <h2 id="versionNotesTitle">Version Notes:</h2>
+        <ul class="version-notes-list" id="versionNotesList"></ul>
+        <button class="login-submit" id="versionNotesAction" type="button">Got it</button>
       </section>
     </div>
     <footer class="app-footer">v1.12.2</footer>

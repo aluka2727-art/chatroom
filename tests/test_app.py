@@ -19,6 +19,7 @@ class ChatroomTests(unittest.TestCase):
             "TESTING": True,
             "SECRET_KEY": "test-secret-key",
             "DATABASE": str(self.database_path),
+            "OPENAI_API_KEY": "",
             "VAPID_PUBLIC_KEY": "",
             "VAPID_PRIVATE_KEY_FILE": "",
             "SESSION_COOKIE_SECURE": False,
@@ -33,14 +34,25 @@ class ChatroomTests(unittest.TestCase):
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
         self.assertIn(b"v1.12.2", page.data)
-        self.assertIn(b'id="whatsNewScreen"', page.data)
+        self.assertIn(b"id=\"versionNotesScreen\"", page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
         self.assertIn(b"/static/app.js", page.data)
         self.assertIn(b"id=\"replyPreview\"", page.data)
+        self.assertIn(b"id=\"replyPreviewLabel\"", page.data)
         self.assertIn(b"id=\"settingsPanel\"", page.data)
+        self.assertIn(b"id=\"displayNameInput\"", page.data)
+        self.assertIn(b"id=\"avatarInput\"", page.data)
+        self.assertIn(b"id=\"dmSearchInput\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
         self.assertIn(b"id=\"themeToggle\"", page.data)
+        self.assertIn(b'APP_VERSION = "1.12.2"', script.data)
+        self.assertIn(b"Couldn't send, inappropriate language", script.data)
+        self.assertIn(b"promotePendingMessage", script.data)
+        self.assertIn(b"createMessageActions", script.data)
+        self.assertIn(b"/api/messages/", script.data)
+        self.assertIn(b"VERSION_NOTES", script.data)
+        self.assertIn(b"pigin-seen-version", script.data)
         self.assertIn(b"/manifest.webmanifest", page.data)
         self.assertIn(b"favicon.ico", page.data)
         self.assertIn(b"apple-touch-icon.png", page.data)
@@ -210,6 +222,9 @@ class ChatroomTests(unittest.TestCase):
             "SESSION_COOKIE_SECURE": False,
         })
         with sqlite3.connect(legacy_database) as database:
+            account_columns = {row[1] for row in database.execute("PRAGMA table_info(accounts)")}
+            self.assertIn("display_name", account_columns)
+            self.assertIn("avatar_ext", account_columns)
             columns = {row[1] for row in database.execute("PRAGMA table_info(messages)")}
             direct_message_columns = {
                 row[1] for row in database.execute("PRAGMA table_info(direct_messages)")
@@ -243,9 +258,29 @@ class ChatroomTests(unittest.TestCase):
         self.assertEqual(third_client.get(f"/api/dms/{first_user['id']}").json["messages"], [])
 
         contacts = self.client.get("/api/dms").json["contacts"]
-        second_contact = next(contact for contact in contacts if contact["id"] == second_user["id"])
-        self.assertEqual(second_contact["last_message"], "A private hello")
-        self.assertNotIn(first_user["id"], [contact["id"] for contact in contacts])
+        self.assertEqual([contact["id"] for contact in contacts], [second_user["id"]])
+        self.assertEqual(contacts[0]["last_message"], "A private hello")
+        self.assertNotIn(third_user["id"], [contact["id"] for contact in contacts])
+
+        animal_search = self.client.get(f"/api/dms/search?q={third_user['username'][:3]}")
+        self.assertEqual(animal_search.status_code, 200)
+        self.assertIn(third_user["id"], [item["id"] for item in animal_search.json["results"]])
+
+        third_profile = third_client.patch(
+            "/api/profile",
+            json={"display_name": "Private Fox"},
+            headers={"X-CSRF-Token": third_token},
+        )
+        self.assertEqual(third_profile.status_code, 200, third_profile.json)
+        hidden_animal_search = self.client.get(f"/api/dms/search?q={third_user['username']}")
+        self.assertEqual(hidden_animal_search.status_code, 200)
+        self.assertNotIn(third_user["id"], [item["id"] for item in hidden_animal_search.json["results"]])
+        display_search = self.client.get("/api/dms/search?q=Private")
+        self.assertEqual(display_search.status_code, 200)
+        self.assertIn(third_user["id"], [item["id"] for item in display_search.json["results"]])
+        matched = next(item for item in display_search.json["results"] if item["id"] == third_user["id"])
+        self.assertEqual(matched["username"], "Private Fox")
+        self.assertNotIn("animal_username", matched)
 
         reply = second_client.post(
             f"/api/dms/{first_user['id']}",
@@ -316,20 +351,31 @@ class ChatroomTests(unittest.TestCase):
         moderate.assert_called_once()
         self.assertEqual(moderate.call_args.args[1], "")
 
-    def test_messages_reject_profanity_without_api_key(self):
+    def test_messages_allow_casual_swearing_but_block_targeted_insults(self):
         from app import moderate_message
 
-        self.assertEqual(moderate_message("what the fuck", ""), MODERATION_REJECT_MESSAGE)
+        self.assertIsNone(moderate_message("what the fuck", ""))
+        self.assertIsNone(moderate_message("this is shit", ""))
+        self.assertIsNone(moderate_message("damn that was close", ""))
         self.assertIsNone(moderate_message("hello everyone", ""))
+        self.assertEqual(moderate_message("fucktard", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("f*cktard", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("you slut", ""), MODERATION_REJECT_MESSAGE)
+        self.assertEqual(moderate_message("asshole", ""), MODERATION_REJECT_MESSAGE)
         _user, token = self.create_account()
-        response = self.client.post(
+        allowed = self.client.post(
             "/api/messages",
             json={"text": "this is shit"},
             headers={"X-CSRF-Token": token},
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json["error"], MODERATION_REJECT_MESSAGE)
-        self.assertEqual(self.client.get("/api/messages").json["messages"], [])
+        self.assertEqual(allowed.status_code, 201)
+        blocked = self.client.post(
+            "/api/messages",
+            json={"text": "you bitch"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(blocked.status_code, 400)
+        self.assertEqual(blocked.json["error"], MODERATION_REJECT_MESSAGE)
 
     def test_messages_reject_slur_evasions_without_api_key(self):
         from app import moderate_message
@@ -379,6 +425,74 @@ class ChatroomTests(unittest.TestCase):
         messages = self.client.get("/api/messages").json["messages"]
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["text"], "Hello clean world")
+
+    def test_users_can_edit_own_room_and_direct_messages(self):
+        author, token = self.create_account()
+        other_client = self.app.test_client()
+        other, other_token = self.create_account(other_client)
+
+        sent = self.client.post(
+            "/api/messages",
+            json={"text": "Original room text"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(sent.status_code, 201)
+        message_id = sent.json["id"]
+        cursor = self.client.get("/api/messages").json["cursor"]
+
+        blocked = self.client.patch(
+            f"/api/messages/{message_id}",
+            json={"text": "you slut"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(blocked.status_code, 400)
+        self.assertEqual(blocked.json["error"], MODERATION_REJECT_MESSAGE)
+
+        foreign = other_client.patch(
+            f"/api/messages/{message_id}",
+            json={"text": "Hijacked"},
+            headers={"X-CSRF-Token": other_token},
+        )
+        self.assertEqual(foreign.status_code, 403)
+
+        edited = self.client.patch(
+            f"/api/messages/{message_id}",
+            json={"text": "Edited room text"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(edited.status_code, 200)
+        self.assertTrue(edited.json["edited"])
+        updates = self.client.get(f"/api/messages?after={cursor}").json["messages"]
+        updated = next(message for message in updates if message["id"] == message_id)
+        self.assertEqual(updated["text"], "Edited room text")
+        self.assertTrue(updated["edited"])
+        self.assertTrue(updated["is_own"])
+
+        dm = self.client.post(
+            f"/api/dms/{other['id']}",
+            json={"text": "Original dm text"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(dm.status_code, 201)
+        dm_id = dm.json["id"]
+        first_read = other_client.get(f"/api/dms/{author['id']}").json
+        self.assertEqual(first_read["messages"][0]["text"], "Original dm text")
+        self.assertFalse(first_read["messages"][0]["edited"])
+
+        dm_edit = self.client.patch(
+            f"/api/dms/{other['id']}/messages/{dm_id}",
+            json={"text": "Edited dm text"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(dm_edit.status_code, 200)
+        self.assertTrue(dm_edit.json["edited"])
+        synced = other_client.get(
+            f"/api/dms/{author['id']}?after={first_read['cursor']}&since={first_read['server_time']}"
+        ).json
+        self.assertEqual(len(synced["messages"]), 1)
+        self.assertEqual(synced["messages"][0]["id"], dm_id)
+        self.assertEqual(synced["messages"][0]["text"], "Edited dm text")
+        self.assertTrue(synced["messages"][0]["edited"])
 
     def test_messages_return_unavailable_when_moderation_fails(self):
         self.app.config["OPENAI_API_KEY"] = "test-key"
@@ -446,7 +560,108 @@ class ChatroomTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.json)
         self.assertEqual(response.json["user"]["username"], user["username"])
 
-    def test_deleted_author_stays_deleted_after_username_reuse(self):
+    def test_display_name_and_avatar_are_linked_to_account(self):
+        from io import BytesIO
+
+        user, token = self.create_account()
+        updated = self.client.patch(
+            "/api/profile",
+            json={"display_name": "Lucas Chat"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(updated.status_code, 200, updated.json)
+        self.assertEqual(updated.json["user"]["display_name"], "Lucas Chat")
+        self.assertEqual(updated.json["user"]["public_name"], "Lucas Chat")
+        self.assertEqual(updated.json["user"]["username"], user["username"])
+
+        token = self.client.get("/api/session").json["csrf_token"]
+        tiny_png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+            b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        uploaded = self.client.post(
+            "/api/profile/avatar",
+            data={"avatar": (BytesIO(tiny_png), "face.bin", "application/octet-stream")},
+            content_type="multipart/form-data",
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.json)
+        self.assertTrue(uploaded.json["user"]["avatar_url"].endswith(f"/api/avatars/{user['id']}"))
+
+        token = self.client.get("/api/session").json["csrf_token"]
+        replacement_png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf"
+            b"\xc0\x00\x00\x03\x01\x01\x00\x18\xdd\x8d\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        replaced = self.client.post(
+            "/api/profile/avatar",
+            data={"avatar": (BytesIO(replacement_png), "face.png")},
+            content_type="multipart/form-data",
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(replaced.status_code, 200, replaced.json)
+        self.assertTrue(replaced.json["user"]["avatar_url"].endswith(f"/api/avatars/{user['id']}"))
+        avatar = self.client.get(replaced.json["user"]["avatar_url"])
+        self.assertEqual(avatar.status_code, 200)
+        self.assertEqual(avatar.data, replacement_png)
+
+        posted = self.client.post(
+            "/api/messages",
+            json={"text": "Hello with a profile"},
+            headers={"X-CSRF-Token": self.client.get("/api/session").json["csrf_token"]},
+        )
+        self.assertEqual(posted.status_code, 201)
+        message = self.client.get("/api/messages").json["messages"][0]
+        self.assertEqual(message["username"], user["username"])
+        self.assertEqual(message["animal_username"], user["username"])
+        self.assertIsNone(message["avatar_url"])
+
+        partner_client = self.app.test_client()
+        partner, _partner_token = self.create_account(partner_client)
+        dm = self.client.post(
+            f"/api/dms/{partner['id']}",
+            json={"text": "Private hello"},
+            headers={"X-CSRF-Token": self.client.get("/api/session").json["csrf_token"]},
+        )
+        self.assertEqual(dm.status_code, 201)
+        dm_message = partner_client.get(f"/api/dms/{user['id']}").json["messages"][0]
+        self.assertEqual(dm_message["username"], "Lucas Chat")
+        self.assertEqual(dm_message["animal_username"], user["username"])
+        self.assertTrue(dm_message["avatar_url"].endswith(f"/api/avatars/{user['id']}"))
+
+        other = self.app.test_client()
+        csrf = other.get("/api/session").json["csrf_token"]
+        signed_in = other.post(
+            "/api/auth",
+            json={
+                "mode": "signin",
+                "username": "lucas chat",
+                "password": "correct-horse-battery",
+            },
+            headers={"X-CSRF-Token": csrf},
+        )
+        self.assertEqual(signed_in.status_code, 200, signed_in.json)
+        self.assertEqual(signed_in.json["user"]["id"], user["id"])
+        self.assertEqual(signed_in.json["user"]["public_name"], "Lucas Chat")
+
+        animal_client = self.app.test_client()
+        animal_csrf = animal_client.get("/api/session").json["csrf_token"]
+        animal_signin = animal_client.post(
+            "/api/auth",
+            json={
+                "mode": "signin",
+                "username": user["username"],
+                "password": "correct-horse-battery",
+            },
+            headers={"X-CSRF-Token": animal_csrf},
+        )
+        self.assertEqual(animal_signin.status_code, 200)
+        self.assertEqual(animal_signin.json["user"]["id"], user["id"])
+
+    def test_deleted_author_stays_deleted_when_name_is_reserved(self):
+        admin_client, _admin_token = self.create_admin()
         old_user, old_token = self.create_account()
         self.client.post(
             "/api/messages",
@@ -454,12 +669,17 @@ class ChatroomTests(unittest.TestCase):
             headers={"X-CSRF-Token": old_token},
         )
         old_username = old_user["username"]
-        with sqlite3.connect(self.database_path) as database:
-            database.execute("DELETE FROM accounts WHERE username = ?", (old_username,))
+        accounts = admin_client.get("/api/admin/accounts").json["accounts"]
+        member_account = next(account for account in accounts if account["username"] == old_username)
+        admin_token = admin_client.get("/api/session").json["csrf_token"]
+        deleted = admin_client.delete(
+            f"/api/admin/accounts/{member_account['id']}",
+            headers={"X-CSRF-Token": admin_token},
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.json)
 
-        with patch("app.secrets.choice", return_value=old_username):
-            new_user, new_token = self.create_account()
-        self.assertEqual(new_user["username"], old_username)
+        new_user, new_token = self.create_account()
+        self.assertNotEqual(new_user["username"], old_username)
 
         response = self.client.get("/api/messages").json["messages"]
         self.assertEqual(response[0]["username"], "[DELETED]")
@@ -469,7 +689,10 @@ class ChatroomTests(unittest.TestCase):
             headers={"X-CSRF-Token": new_token},
         )
         response = self.client.get("/api/messages").json["messages"]
-        self.assertEqual([message["username"] for message in response], ["[DELETED]", old_username])
+        self.assertEqual(
+            [message["username"] for message in response],
+            ["[DELETED]", new_user["username"]],
+        )
 
     def test_cricket_is_reserved_and_delete_command_protects_admin(self):
         result = self.app.test_cli_runner().invoke(
@@ -526,10 +749,15 @@ class ChatroomTests(unittest.TestCase):
             remaining = database.execute("SELECT username, role FROM accounts").fetchall()
         self.assertEqual(remaining, [("Viper", "admin")])
 
-    def test_admin_account_delete_tombstones_messages_and_releases_name(self):
+    def test_admin_account_delete_tombstones_messages_and_keeps_name_reserved(self):
         admin_client, _admin_token = self.create_admin()
         member_client = self.app.test_client()
         member, member_token = self.create_account(member_client)
+        member_client.patch(
+            "/api/profile",
+            json={"display_name": "Taken Display"},
+            headers={"X-CSRF-Token": member_token},
+        )
         member_client.post(
             "/api/messages",
             json={"text": "This belongs to the deleted profile"},
@@ -545,14 +773,32 @@ class ChatroomTests(unittest.TestCase):
             headers={"X-CSRF-Token": admin_token},
         )
         self.assertEqual(deleted.status_code, 200, deleted.json)
+
+        # Deleted animal/display names stay reserved and cannot be reused.
+        other_client = self.app.test_client()
         with patch("app.secrets.choice", return_value=member["username"]):
-            replacement, _replacement_token = self.create_account(self.app.test_client())
-        self.assertEqual(replacement["username"], member["username"])
+            reserved_attempt = other_client.post(
+                "/api/auth",
+                json={
+                    "mode": "create",
+                    "password": "correct-horse-battery",
+                    "confirm_password": "correct-horse-battery",
+                },
+                headers={"X-CSRF-Token": other_client.get("/api/session").json["csrf_token"]},
+            )
+        self.assertEqual(reserved_attempt.status_code, 409)
+        other, other_token = self.create_account(other_client)
+        self.assertNotEqual(other["username"], member["username"])
+        blocked_display = other_client.patch(
+            "/api/profile",
+            json={"display_name": "taken display"},
+            headers={"X-CSRF-Token": other_token},
+        )
+        self.assertEqual(blocked_display.status_code, 409)
 
         retained = admin_client.get(f"/api/messages?after={message_cursor}").json["messages"]
         self.assertEqual(retained[0]["username"], "[DELETED]")
         self.assertEqual(retained[0]["text"], "[DELETED]")
-        self.assertNotEqual(replacement["id"], member["id"])
         deleted_session = member_client.get("/api/messages")
         self.assertEqual(deleted_session.status_code, 410)
         self.assertTrue(deleted_session.json["account_deleted"])
@@ -755,6 +1001,7 @@ class ChatroomTests(unittest.TestCase):
         worker = client.get("/sw.js")
         self.assertIn(b"badgeCount", worker.data)
         self.assertIn(b"setAppBadge", worker.data)
+        self.assertIn(b"read-sync", worker.data)
         worker.close()
 
     def enable_push(self, client, endpoint):
@@ -830,6 +1077,63 @@ class ChatroomTests(unittest.TestCase):
             headers={"X-CSRF-Token": second_token},
         )
         self.assertEqual(rejected.status_code, 400)
+
+    def test_marking_read_syncs_notifications_across_devices(self):
+        recipient, recipient_token = self.create_account()
+        sender_client = self.app.test_client()
+        sender, sender_token = self.create_account(sender_client)
+        self.enable_push(self.client, "https://push.example.test/phone")
+        self.enable_push(self.client, "https://push.example.test/laptop")
+
+        with patch("app.webpush"):
+            sender_client.post(
+                "/api/messages",
+                json={"text": "Hello room"},
+                headers={"X-CSRF-Token": sender_token},
+            )
+            sender_client.post(
+                f"/api/dms/{recipient['id']}",
+                json={"text": "Hello dm"},
+                headers={"X-CSRF-Token": sender_token},
+            )
+
+        with patch("app.webpush") as webpush:
+            marked = self.client.post(
+                "/api/reads",
+                json={"kind": "chat"},
+                headers={"X-CSRF-Token": recipient_token},
+            )
+            self.assertEqual(marked.status_code, 200, marked.json)
+            self.assertEqual(marked.json["group"], 0)
+            self.assertEqual(marked.json["dms"], 1)
+            self.assertEqual(webpush.call_count, 2)
+            payloads = [json.loads(call.kwargs["data"]) for call in webpush.call_args_list]
+            self.assertTrue(all(payload["type"] == "read-sync" for payload in payloads))
+            self.assertTrue(all(payload["badgeCount"] == 1 for payload in payloads))
+            self.assertTrue(all(payload["clearTags"] == ["pigin-chat"] for payload in payloads))
+            self.assertTrue(all(payload["clearAll"] is False for payload in payloads))
+            endpoints = {
+                call.kwargs["subscription_info"]["endpoint"] for call in webpush.call_args_list
+            }
+            self.assertEqual(
+                endpoints,
+                {"https://push.example.test/phone", "https://push.example.test/laptop"},
+            )
+
+        with patch("app.webpush") as webpush:
+            cleared = self.client.post(
+                "/api/reads",
+                json={"kind": "dm", "partner_id": sender["id"]},
+                headers={"X-CSRF-Token": recipient_token},
+            )
+            self.assertEqual(cleared.status_code, 200, cleared.json)
+            self.assertEqual(cleared.json["total"], 0)
+            self.assertEqual(webpush.call_count, 2)
+            payload = json.loads(webpush.call_args.kwargs["data"])
+            self.assertEqual(payload["type"], "read-sync")
+            self.assertEqual(payload["badgeCount"], 0)
+            self.assertEqual(payload["clearTags"], [f"pigin-dm-{sender['id']}"])
+            self.assertTrue(payload["clearAll"])
 
     def test_room_push_skips_the_open_tab_and_counts_the_badge(self):
         recipient, recipient_token = self.create_account()

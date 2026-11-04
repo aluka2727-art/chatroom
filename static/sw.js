@@ -1,3 +1,25 @@
+async function applyReadSync(notification) {
+  const badgeCount = notification.badgeCount;
+  const clearAll = Boolean(notification.clearAll);
+  const clearTags = Array.isArray(notification.clearTags) ? notification.clearTags : [];
+  const existing = await self.registration.getNotifications();
+  for (const item of existing) {
+    if (clearAll || (item.tag && clearTags.includes(item.tag))) item.close();
+  }
+  if (Number.isInteger(badgeCount)) {
+    if (badgeCount > 0 && navigator.setAppBadge) await navigator.setAppBadge(badgeCount);
+    else if (navigator.clearAppBadge) await navigator.clearAppBadge();
+  }
+  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  for (const client of windows) {
+    client.postMessage({
+      type: "unread-refresh",
+      unread: notification.unread || null,
+      source: "read-sync",
+    });
+  }
+}
+
 self.addEventListener("push", event => {
   event.waitUntil((async () => {
     let notification = {};
@@ -5,6 +27,11 @@ self.addEventListener("push", event => {
       notification = event.data ? event.data.json() : {};
     } catch {
       notification = { title: "PIGIN", body: "You have a new message." };
+    }
+
+    if (notification.type === "read-sync") {
+      await applyReadSync(notification);
+      return;
     }
 
     const title = notification.title || "PIGIN";
