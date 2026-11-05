@@ -17,9 +17,12 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.12.2";
+const APP_VERSION = "1.12.3";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.12.3": [
+    "Fixed sign-in errors on devices that don't retain the initial session cookie.",
+  ],
   "1.12.2": [
     "A looping pigeon animation now keeps you company while PIGIN loads, including chats and DMs.",
   ],

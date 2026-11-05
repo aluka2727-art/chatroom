@@ -646,6 +646,14 @@ def create_app(test_config=None):
     def protect_mutations():
         if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
             return None
+        # Signing in may be the first request that can establish a usable
+        # session cookie (some installed mobile browsers don't retain the
+        # anonymous session created by the page load). Permit only a JSON
+        # login request whose Origin exactly matches this app's origin.
+        if request.path == "/api/auth" and request.is_json:
+            origin = request.headers.get("Origin", "").rstrip("/")
+            if origin and origin == request.host_url.rstrip("/"):
+                return None
         expected = session.get("csrf_token", "")
         supplied = request.headers.get("X-CSRF-Token", "")
         if not expected or not supplied or not secrets.compare_digest(expected, supplied):
