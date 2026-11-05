@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 from functools import wraps
 from pathlib import Path
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 import certifi
 import click
@@ -642,9 +643,35 @@ def create_app(test_config=None):
             session["csrf_token"] = token
         return token
 
+    def auth_token_serializer():
+        return URLSafeTimedSerializer(app.secret_key, salt="pigin-auth-token")
+
+    def auth_token_for(account_id):
+        return auth_token_serializer().dumps({"account_id": account_id})
+
+    def auth_token_account_id():
+        authorization = request.headers.get("Authorization", "")
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            return None
+        try:
+            payload = auth_token_serializer().loads(
+                token,
+                max_age=app.config["PERMANENT_SESSION_LIFETIME"],
+            )
+        except (BadSignature, SignatureExpired):
+            return None
+        account_id = payload.get("account_id") if isinstance(payload, dict) else None
+        return account_id if isinstance(account_id, int) else None
+
     @app.before_request
     def protect_mutations():
         if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+            return None
+        # Bearer tokens are attached explicitly by this app and cannot be
+        # added by a cross-site form, so they provide CSRF protection when a
+        # browser does not retain the Flask session cookie.
+        if auth_token_account_id() is not None:
             return None
         # Signing in may be the first request that can establish a usable
         # session cookie (some installed mobile browsers don't retain the
@@ -668,7 +695,7 @@ def create_app(test_config=None):
         return response
 
     def get_current_account():
-        account_id = session.get("account_id")
+        account_id = auth_token_account_id() or session.get("account_id")
         if not isinstance(account_id, int):
             return None
         return get_db().execute(
@@ -1004,7 +1031,7 @@ def create_app(test_config=None):
     def api_session():
         database = get_db()
         account = get_current_account()
-        account_id = session.get("account_id")
+        account_id = auth_token_account_id() or session.get("account_id")
         deleted = None
         if account is None and isinstance(account_id, int):
             deleted = database.execute(
@@ -1118,6 +1145,7 @@ def create_app(test_config=None):
         return jsonify(
             user=serialize_account(account, 0),
             csrf_token=token,
+            auth_token=auth_token_for(account_id),
         ), 201 if mode == "create" else 200
 
     @app.post("/api/logout")

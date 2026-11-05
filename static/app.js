@@ -17,9 +17,12 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.12.3";
+const APP_VERSION = "1.12.4";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.12.4": [
+    "Sign-in now works on devices that don't retain session cookies.",
+  ],
   "1.12.3": [
     "Fixed sign-in errors on devices that don't retain the initial session cookie.",
   ],
@@ -84,6 +87,10 @@ const pushHintText = document.querySelector("#pushHintText");
 const themeToggle = document.querySelector("#themeToggle");
 let currentUser = null;
 let csrfToken = "";
+let authToken = "";
+try {
+  authToken = localStorage.getItem("pigin-auth-token") || "";
+} catch (error) {}
 let messageCursor = 0;
 let replyingTo = null;
 let editingMessage = null;
@@ -288,6 +295,7 @@ async function api(path, options = {}, retryCsrf = true) {
     csrfToken = sessionData.csrf_token;
   }
   const headers = { Accept: "application/json", ...options.headers };
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (method !== "GET") headers["X-CSRF-Token"] = csrfToken;
   const response = await fetch(path, { ...options, headers, credentials: "same-origin", cache: "no-store" });
@@ -298,6 +306,10 @@ async function api(path, options = {}, retryCsrf = true) {
     return api(path, options, false);
   }
   if (!response.ok) {
+    if (response.status === 401 && authToken) {
+      authToken = "";
+      try { localStorage.removeItem("pigin-auth-token"); } catch (error) {}
+    }
     const error = new Error(data.error || "The request could not be completed.");
     error.status = response.status;
     error.accountDeleted = Boolean(data.account_deleted);
@@ -2008,6 +2020,8 @@ warningAction.addEventListener("click", async () => {
       await disablePushSubscription();
       await api("/api/logout", { method: "POST", body: "{}" });
     } finally {
+      authToken = "";
+      try { localStorage.removeItem("pigin-auth-token"); } catch (error) {}
       showLogin();
       usernameInput.focus();
     }
@@ -2039,9 +2053,20 @@ accountForm.addEventListener("submit", async event => {
         confirm_password: confirmInput.value,
       }),
     });
-    csrfToken = data.csrf_token;
-    showRoom(data.user);
-    if (mode === "create") showAccountCreated(data.user.username);
+    authToken = data.auth_token || "";
+    try {
+      if (authToken) localStorage.setItem("pigin-auth-token", authToken);
+    } catch (error) {}
+    // Confirm the browser retained the session cookie before switching to the
+    // room. The bearer token also authenticates this check on browsers that
+    // don't retain the Flask session cookie.
+    const sessionData = await api("/api/session");
+    if (!sessionData.user || sessionData.user.id !== data.user.id) {
+      throw new Error("Sign-in succeeded, but this browser didn't keep the session. Try opening PIGIN in Safari and signing in again.");
+    }
+    csrfToken = sessionData.csrf_token;
+    showRoom(sessionData.user);
+    if (mode === "create") showAccountCreated(sessionData.user.username);
   } catch (error) {
     if (error.accountDeleted) {
       showWarning("account", "This account was deleted by an admin. Sign in with an active account.");
@@ -2058,6 +2083,8 @@ document.querySelector("#switchAccount").addEventListener("click", async () => {
   try {
     await disablePushSubscription();
     await api("/api/logout", { method: "POST", body: "{}" });
+    authToken = "";
+    try { localStorage.removeItem("pigin-auth-token"); } catch (error) {}
     showLogin();
     usernameInput.focus();
   } catch (error) {
