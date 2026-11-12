@@ -300,6 +300,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .dm-list-copy { min-width: 0; }
 .dm-list-copy h3 { margin: 0; font: 600 14px "Space Grotesk", sans-serif; }
 .dm-list-copy p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+.dm-list-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .dm-sidebar .admin-refresh { flex: 0 0 auto; }
 .dm-search { display: grid; gap: 6px; padding: 0 4px 10px; }
 .dm-search .field-label { margin: 0; }
@@ -314,7 +315,14 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   background: var(--surface);
 }
 .dm-search-empty { padding: 10px 12px; color: var(--faint); font-size: 11px; line-height: 1.45; }
+.group-create-panel { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.group-create-panel .field-label { margin: 0; }
+.group-create-panel .settings-toggle { justify-self: start; }
+.group-member-results { display: grid; max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
+.group-member-results:empty { display: none; }
+.dm-section-heading { margin: 2px 4px -4px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .dm-contacts { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); scrollbar-color: var(--scrollbar) transparent; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+.dm-group-contacts { flex: 0 1 auto; max-height: 22vh; }
 .dm-contact {
   position: relative;
   display: grid;
@@ -671,6 +679,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   .settings-row { align-items: flex-start; flex-direction: column; }
   .settings-toggle { max-width: none; }
   .dm-layout { padding-top: 6px; }
+  .dm-group-contacts { max-height: 18vh; }
   .dm-contact { padding: 10px 14px 10px 5px; }
   .dm-conversation-heading { padding-right: 4px; padding-left: 4px; }
   .dm-back { width: 34px; height: 34px; }

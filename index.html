@@ -26,7 +26,7 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='bird-flap') }}">
   <script src="{{ url_for('static', filename='emoji-data.js', v='unicode-17.0') }}" defer></script>
-  <script src="{{ url_for('static', filename='app.js', v='1.12.5') }}" defer></script>
+  <script src="{{ url_for('static', filename='app.js', v='1.12.6') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -134,7 +134,10 @@
                     <h3>Messages</h3>
                     <p>People you’ve already texted</p>
                   </div>
-                  <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
+                  <div class="dm-list-actions">
+                    <button class="settings-toggle" id="newGroupButton" type="button" aria-expanded="false" aria-controls="groupCreatePanel">New group</button>
+                    <button class="admin-refresh" id="dmRefresh" type="button">Refresh</button>
+                  </div>
                 </header>
                 <form class="dm-search" id="dmSearchForm" role="search">
                   <label class="field-label" for="dmSearchInput">Start a conversation</label>
@@ -142,6 +145,18 @@
                   <p class="dm-search-hint">Search a username to message someone new.</p>
                 </form>
                 <div class="dm-search-results" id="dmSearchResults" hidden></div>
+                <form class="group-create-panel" id="groupCreatePanel" hidden>
+                  <label class="field-label" for="groupNameInput">Group name</label>
+                  <input class="auth-input" id="groupNameInput" type="text" maxlength="48" placeholder="Name this group" required>
+                  <label class="field-label" for="groupMemberSearch">Add at least two people</label>
+                  <input class="auth-input" id="groupMemberSearch" type="search" maxlength="24" placeholder="Search usernames" autocomplete="off">
+                  <div class="group-member-results" id="groupMemberResults"></div>
+                  <p class="composer-error" id="groupCreateError" role="alert" hidden></p>
+                  <button class="settings-toggle" id="createGroupSubmit" type="submit" disabled>Create group chat</button>
+                </form>
+                <h4 class="dm-section-heading">Group chats</h4>
+                <nav class="dm-contacts dm-group-contacts" id="dmGroupContacts" aria-label="Group chats"></nav>
+                <h4 class="dm-section-heading">Direct messages</h4>
                 <nav class="dm-contacts" id="dmContacts" aria-label="Conversations"></nav>
               </div>
               <section class="dm-conversation" id="dmConversation" aria-label="Selected conversation" hidden>
@@ -284,7 +299,7 @@
         <button class="login-submit" id="versionNotesAction" type="button">Got it</button>
       </section>
     </div>
-    <footer class="app-footer">v1.12.5</footer>
+    <footer class="app-footer">v1.12.6</footer>
   </div>
   <div class="app-loading" id="appLoading" role="status" aria-label="Loading PIGIN">
     <div class="loading-indicator">

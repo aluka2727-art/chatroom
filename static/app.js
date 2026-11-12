@@ -17,7 +17,7 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.12.5";
+const APP_VERSION = "1.12.6";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
   "1.12.5": [
@@ -25,6 +25,9 @@ const VERSION_NOTES = {
     "Messages now show both the date and time.",
     "Tap a message to reply or edit your own messages.",
     "Log out from Settings, or choose Delete User to delete your account after confirmation and password verification.",
+  ],
+  "1.12.6": [
+    "Create private group chats with a custom name and find everyone by their DM username.",
   ],
   "1.12.4": [
     "Sign-in now works on devices that don't retain session cookies.",
@@ -81,6 +84,7 @@ const dmConversation = document.querySelector("#dmConversation");
 const dmBackButton = document.querySelector("#dmBackButton");
 const dmError = document.querySelector("#dmError");
 const dmContacts = document.querySelector("#dmContacts");
+const dmGroupContacts = document.querySelector("#dmGroupContacts");
 const dmFeed = document.querySelector("#dmFeed");
 const dmMessageInput = document.querySelector("#dmMessageInput");
 const dmSendButton = document.querySelector("#dmSendButton");
@@ -103,9 +107,16 @@ let editingMessage = null;
 let replyingToDm = null;
 let editingDmMessage = null;
 let selectedDmUser = null;
+let selectedDmGroup = null;
 let dmMessageCursor = 0;
+let groupMessageCursor = 0;
 let dmPollSince = "";
 let dmContactsSnapshot = "";
+let dmGroupsSnapshot = "";
+let groupSearchPeople = [];
+const selectedGroupMembers = new Map();
+let groupSearchTimer = 0;
+let groupMessagesLoading = false;
 let activeView = "chat";
 let openMessageMenu = null;
 let accountCreatedTimeout;
@@ -366,7 +377,15 @@ function showLogin() {
   feed.replaceChildren();
   dmFeed.replaceChildren();
   dmContacts.replaceChildren();
+  dmGroupContacts.replaceChildren();
   dmContactsSnapshot = "";
+  dmGroupsSnapshot = "";
+  selectedGroupMembers.clear();
+  groupSearchPeople = [];
+  document.querySelector("#groupCreatePanel").reset();
+  document.querySelector("#groupCreatePanel").hidden = true;
+  document.querySelector("#newGroupButton").setAttribute("aria-expanded", "false");
+  document.querySelector("#groupMemberResults").replaceChildren();
   resetDmConversationPane();
   pendingDmPartnerId = null;
   pushEndpoint = "";
@@ -1045,6 +1064,7 @@ function startPolling() {
     loadMessages();
     if (activeView === "dms") {
       loadDmContacts();
+      loadDmGroups();
       loadDmMessages();
     }
   };
@@ -1259,6 +1279,29 @@ function renderDmContacts(contacts) {
   updateDmUnreadDots();
 }
 
+function renderDmGroups(groups) {
+  dmGroupContacts.replaceChildren();
+  if (!groups.length) {
+    const empty = document.createElement("p");
+    empty.className = "dm-contact-empty";
+    empty.textContent = "Your group chats will appear here.";
+    dmGroupContacts.append(empty);
+    return;
+  }
+  for (const group of groups) {
+    const button = createDmPersonButton(
+      { id: group.id, username: group.name },
+      {
+        preview: group.last_message || `${group.members.length} members`,
+        active: selectedDmGroup?.id === group.id,
+        onClick: () => selectDmGroup(group),
+      },
+    );
+    button.classList.add("dm-group-contact");
+    dmGroupContacts.append(button);
+  }
+}
+
 function clearDmSearchResults() {
   const results = document.querySelector("#dmSearchResults");
   results.hidden = true;
@@ -1294,6 +1337,62 @@ function renderDmSearchResults(people, query) {
 }
 
 let dmSearchTimer = 0;
+function renderGroupMemberResults(people, query) {
+  const results = document.querySelector("#groupMemberResults");
+  results.replaceChildren();
+  if (!query) return;
+  if (!people.length) {
+    const empty = document.createElement("p");
+    empty.className = "dm-search-empty";
+    empty.textContent = `No one matched “${query}”.`;
+    results.append(empty);
+    return;
+  }
+  for (const person of people) {
+    const selected = selectedGroupMembers.has(person.id);
+    const button = createDmPersonButton(person, {
+      preview: selected ? "Added to group" : "Tap to add",
+      active: selected,
+      onClick: () => {
+        if (selectedGroupMembers.has(person.id)) selectedGroupMembers.delete(person.id);
+        else selectedGroupMembers.set(person.id, person);
+        renderGroupMemberResults(groupSearchPeople, query);
+        updateGroupCreateButton();
+      },
+    });
+    results.append(button);
+  }
+}
+
+function updateGroupCreateButton() {
+  document.querySelector("#createGroupSubmit").disabled =
+    selectedGroupMembers.size < 2 || !document.querySelector("#groupNameInput").value.trim();
+}
+
+async function searchGroupMembers(query) {
+  const trimmed = query.trim();
+  const results = document.querySelector("#groupMemberResults");
+  if (!trimmed) {
+    groupSearchPeople = [];
+    results.replaceChildren();
+    return;
+  }
+  try {
+    const data = await api(`/api/dms/search?q=${encodeURIComponent(trimmed)}`);
+    groupSearchPeople = data.results || [];
+    renderGroupMemberResults(groupSearchPeople, trimmed);
+  } catch (error) {
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      document.querySelector("#groupCreateError").textContent = error.message;
+      document.querySelector("#groupCreateError").hidden = false;
+    }
+  }
+}
+
 async function searchDmPeople(query) {
   const trimmed = query.trim();
   if (!trimmed) {
@@ -1340,6 +1439,8 @@ async function loadDmContacts() {
       selectedDmUser = contacts.find(contact => contact.id === selectedDmUser.id) || null;
       if (!selectedDmUser) resetDmConversationPane();
       else showDmConversationPage();
+    } else if (selectedDmGroup) {
+      showDmConversationPage();
     } else {
       showDmContactsPage();
     }
@@ -1358,6 +1459,31 @@ async function loadDmContacts() {
   }
 }
 
+async function loadDmGroups() {
+  if (!currentUser) return;
+  try {
+    const data = await api("/api/groups");
+    const groups = data.groups || [];
+    const snapshot = JSON.stringify(groups);
+    if (snapshot === dmGroupsSnapshot) return;
+    dmGroupsSnapshot = snapshot;
+    if (selectedDmGroup) {
+      selectedDmGroup = groups.find(group => group.id === selectedDmGroup.id) || null;
+      if (!selectedDmGroup) resetDmConversationPane();
+      else if (activeView === "dms") showDmConversationPage();
+    }
+    renderDmGroups(groups);
+  } catch (error) {
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      showDmError(error.message);
+    }
+  }
+}
+
 function showDmContactsPage() {
   dmSidebar.hidden = false;
   dmConversation.hidden = true;
@@ -1372,7 +1498,9 @@ function showDmConversationPage() {
 
 function resetDmConversationPane() {
   selectedDmUser = null;
+  selectedDmGroup = null;
   dmMessageCursor = 0;
+  groupMessageCursor = 0;
   dmPollSince = "";
   clearDmReply();
   clearDmEdit();
@@ -1397,7 +1525,9 @@ function resetDmConversationPane() {
 
 function selectDmContact(contact) {
   selectedDmUser = contact;
+  selectedDmGroup = null;
   dmMessageCursor = 0;
+  groupMessageCursor = 0;
   dmPollSince = "";
   clearDmReply();
   clearDmEdit();
@@ -1413,10 +1543,39 @@ function selectDmContact(contact) {
   document.querySelector("#dmConversationTitle").textContent = contact.username;
   document.querySelector("#dmConversationSubtitle").textContent = "Private conversation";
   renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
+  renderDmGroups(JSON.parse(dmGroupsSnapshot || "[]"));
   showDmConversationPage();
   showDmError("");
   dmMessageError.hidden = true;
   loadDmMessages();
+}
+
+function selectDmGroup(group) {
+  selectedDmUser = null;
+  selectedDmGroup = group;
+  dmMessageCursor = 0;
+  groupMessageCursor = 0;
+  dmPollSince = "";
+  clearDmReply();
+  clearDmEdit();
+  closeMessageMenu();
+  dmFeed.replaceChildren();
+  dmMessageInput.value = "";
+  dmMessageInput.style.height = "34px";
+  dmMessageInput.disabled = false;
+  dmMessageInput.placeholder = `Message ${group.name}...`;
+  dmSendButton.disabled = true;
+  syncComposerMode({ isDm: true });
+  syncDmEmojiButtons();
+  document.querySelector("#dmConversationTitle").textContent = group.name;
+  document.querySelector("#dmConversationSubtitle").textContent =
+    `${group.members.length} members: ${group.members.join(", ")}`;
+  renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
+  renderDmGroups(JSON.parse(dmGroupsSnapshot || "[]"));
+  showDmConversationPage();
+  showDmError("");
+  dmMessageError.hidden = true;
+  loadGroupMessages();
 }
 
 function addDmMessage(message) {
@@ -1452,7 +1611,7 @@ function addDmMessage(message) {
     edited.textContent = "edited";
     meta.append(edited);
   }
-  if (!message.pending && !message.send_error && message.reply_to !== undefined && message.username) {
+  if (!selectedDmGroup && !message.pending && !message.send_error && message.reply_to !== undefined && message.username) {
     const canEdit = Boolean(message.is_own) && Number.isInteger(message.id);
     meta.append(createMessageActions(message, {
       trigger: article,
@@ -1471,6 +1630,10 @@ function addDmMessage(message) {
 
 let dmReloadRequested = false;
 async function loadDmMessages() {
+  if (selectedDmGroup) {
+    loadGroupMessages();
+    return;
+  }
   if (!currentUser || !selectedDmUser) return;
   if (dmMessagesLoading) {
     dmReloadRequested = true;
@@ -1527,6 +1690,44 @@ async function loadDmMessages() {
     }
     dmMessagesLoading = false;
     if (currentUser && selectedDmUser && (selectedDmUser.id !== accountId || dmReloadRequested)) loadDmMessages();
+  }
+}
+
+async function loadGroupMessages() {
+  if (!currentUser || !selectedDmGroup || groupMessagesLoading) return;
+  const groupId = selectedDmGroup.id;
+  groupMessagesLoading = true;
+  try {
+    const data = await api(`/api/groups/${groupId}/messages?after=${groupMessageCursor}`);
+    if (selectedDmGroup?.id !== groupId) return;
+    const messages = data.messages || [];
+    if (groupMessageCursor === 0 && !messages.length && !dmFeed.querySelector(".message")) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "No messages yet. Say hello!";
+      dmFeed.replaceChildren(empty);
+    }
+    for (const message of messages) {
+      dmFeed.querySelector(".empty-state")?.remove();
+      addDmMessage(message);
+    }
+    const initialLoad = groupMessageCursor === 0;
+    groupMessageCursor = Math.max(groupMessageCursor, data.cursor || 0);
+    if (messages.length) {
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth", dmFeed);
+    }
+    showDmError("");
+  } catch (error) {
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      showDmError(error.message);
+    }
+  } finally {
+    groupMessagesLoading = false;
   }
 }
 
@@ -1949,8 +2150,10 @@ function setRoomView(view) {
   adminTab.setAttribute("aria-pressed", String(showAdmin));
   if (showDms) {
     if (selectedDmUser) showDmConversationPage();
+    else if (selectedDmGroup) showDmConversationPage();
     else showDmContactsPage();
     loadDmContacts();
+    loadDmGroups();
     loadDmMessages();
   }
   if (showAdmin) loadAdminData();
@@ -2007,6 +2210,7 @@ document.querySelector("#removeAvatarButton").addEventListener("click", async ()
 dmBackButton.addEventListener("click", () => {
   resetDmConversationPane();
   renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
+  renderDmGroups(JSON.parse(dmGroupsSnapshot || "[]"));
   showDmError("");
   syncReadState(unreadState, true);
 });
@@ -2033,8 +2237,70 @@ window.visualViewport?.addEventListener("scroll", () => {
 document.querySelector("#adminRefresh").addEventListener("click", loadAdminData);
 document.querySelector("#dmRefresh").addEventListener("click", () => {
   dmContactsSnapshot = "";
+  dmGroupsSnapshot = "";
   loadDmContacts();
+  loadDmGroups();
   loadDmMessages();
+});
+document.querySelector("#newGroupButton").addEventListener("click", event => {
+  const panel = document.querySelector("#groupCreatePanel");
+  panel.hidden = !panel.hidden;
+  event.currentTarget.setAttribute("aria-expanded", String(!panel.hidden));
+  document.querySelector("#groupCreateError").hidden = true;
+  if (!panel.hidden) document.querySelector("#groupNameInput").focus();
+});
+document.querySelector("#groupNameInput").addEventListener("input", updateGroupCreateButton);
+document.querySelector("#groupMemberSearch").addEventListener("input", event => {
+  clearTimeout(groupSearchTimer);
+  const query = event.target.value;
+  groupSearchTimer = window.setTimeout(() => searchGroupMembers(query), 200);
+});
+document.querySelector("#groupCreatePanel").addEventListener("submit", async event => {
+  event.preventDefault();
+  const submit = document.querySelector("#createGroupSubmit");
+  if (submit.disabled) return;
+  submit.disabled = true;
+  const error = document.querySelector("#groupCreateError");
+  error.hidden = true;
+  try {
+    const result = await api("/api/groups", {
+      method: "POST",
+      body: JSON.stringify({
+        name: document.querySelector("#groupNameInput").value,
+        member_ids: [...selectedGroupMembers.keys()],
+      }),
+    });
+    const members = [
+      publicNameFor(currentUser),
+      ...[...selectedGroupMembers.values()].map(person => person.username),
+    ];
+    document.querySelector("#groupCreatePanel").reset();
+    selectedGroupMembers.clear();
+    groupSearchPeople = [];
+    document.querySelector("#groupMemberResults").replaceChildren();
+    document.querySelector("#groupCreatePanel").hidden = true;
+    document.querySelector("#newGroupButton").setAttribute("aria-expanded", "false");
+    const created = {
+      id: result.id,
+      name: result.name,
+      members,
+      last_message: null,
+      last_message_at: null,
+    };
+    const groups = [
+      created,
+      ...JSON.parse(dmGroupsSnapshot || "[]").filter(group => group.id !== result.id),
+    ];
+    dmGroupsSnapshot = JSON.stringify(groups);
+    renderDmGroups(groups);
+    selectDmGroup(created);
+    loadDmGroups();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+  } finally {
+    updateGroupCreateButton();
+  }
 });
 document.querySelector("#dmSearchForm").addEventListener("submit", event => {
   event.preventDefault();
@@ -2386,7 +2652,7 @@ document.querySelector("#messageForm").addEventListener("submit", async event =>
   }
 });
 dmMessageInput.addEventListener("input", () => {
-  dmSendButton.disabled = !selectedDmUser || !dmMessageInput.value.trim();
+  dmSendButton.disabled = (!selectedDmUser && !selectedDmGroup) || !dmMessageInput.value.trim();
   dmMessageInput.style.height = "auto";
   dmMessageInput.style.height = `${Math.min(dmMessageInput.scrollHeight, 110)}px`;
   dmMessageError.hidden = true;
@@ -2394,7 +2660,53 @@ dmMessageInput.addEventListener("input", () => {
 document.querySelector("#dmMessageForm").addEventListener("submit", async event => {
   event.preventDefault();
   const text = dmMessageInput.value.trim();
-  if (!text || !selectedDmUser || dmSendButton.disabled || !currentUser) return;
+  if (!text || (!selectedDmUser && !selectedDmGroup) || dmSendButton.disabled || !currentUser) return;
+
+  if (selectedDmGroup) {
+    const groupId = selectedDmGroup.id;
+    const pendingId = nextPendingMessageId();
+    const optimistic = {
+      id: pendingId,
+      username: publicNameFor(currentUser),
+      animal_username: currentUser.username,
+      display_name: currentUser.display_name || null,
+      avatar_url: currentUser.avatar_url || null,
+      text,
+      created_at: new Date().toISOString(),
+      is_own: true,
+      pending: true,
+    };
+    dmMessageInput.value = "";
+    dmMessageInput.style.height = "34px";
+    dmMessageError.hidden = true;
+    dmSendButton.disabled = true;
+    dmFeed.querySelector(".empty-state")?.remove();
+    addDmMessage(optimistic);
+    scrollToLatestMessage("auto", dmFeed);
+    try {
+      const result = await api(`/api/groups/${groupId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      });
+      if (selectedDmGroup?.id === groupId) {
+        promotePendingMessage(dmFeed, pendingId, result.id);
+        loadGroupMessages();
+      }
+      dmGroupsSnapshot = "";
+      loadDmGroups();
+    } catch (error) {
+      if (error.accountDeleted) {
+        showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+      } else if (error.status === 401) {
+        showLogin();
+      } else if (selectedDmGroup?.id === groupId) {
+        markMessageSendFailed(dmFeed.querySelector(`[data-message-id="${pendingId}"]`), sendFailureLabel(error));
+      }
+    } finally {
+      dmSendButton.disabled = (!selectedDmUser && !selectedDmGroup) || !dmMessageInput.value.trim();
+    }
+    return;
+  }
 
   if (editingDmMessage) {
     const editSnapshot = editingDmMessage;
@@ -2454,7 +2766,7 @@ document.querySelector("#dmMessageForm").addEventListener("submit", async event 
         showLogin();
       }
     } finally {
-      dmSendButton.disabled = !selectedDmUser || !dmMessageInput.value.trim();
+      dmSendButton.disabled = (!selectedDmUser && !selectedDmGroup) || !dmMessageInput.value.trim();
     }
     return;
   }
@@ -2506,7 +2818,7 @@ document.querySelector("#dmMessageForm").addEventListener("submit", async event 
       markMessageSendFailed(dmFeed.querySelector(`[data-message-id="${pendingId}"]`), sendFailureLabel(error));
     }
   } finally {
-    dmSendButton.disabled = !selectedDmUser || !dmMessageInput.value.trim();
+    dmSendButton.disabled = (!selectedDmUser && !selectedDmGroup) || !dmMessageInput.value.trim();
   }
 });
 document.addEventListener("click", () => closeMessageMenu());

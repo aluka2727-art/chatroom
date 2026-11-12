@@ -34,7 +34,7 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.12.5", page.data)
+        self.assertIn(b"v1.12.6", page.data)
         self.assertIn(b"id=\"versionNotesScreen\"", page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
@@ -45,9 +45,12 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"id=\"displayNameInput\"", page.data)
         self.assertIn(b"id=\"avatarInput\"", page.data)
         self.assertIn(b"id=\"dmSearchInput\"", page.data)
+        self.assertIn(b"id=\"newGroupButton\"", page.data)
+        self.assertIn(b"id=\"groupCreatePanel\"", page.data)
+        self.assertIn(b"id=\"dmGroupContacts\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
         self.assertIn(b"id=\"themeToggle\"", page.data)
-        self.assertIn(b'APP_VERSION = "1.12.5"', script.data)
+        self.assertIn(b'APP_VERSION = "1.12.6"', script.data)
         self.assertIn(b"Couldn't send, inappropriate language", script.data)
         self.assertIn(b"promotePendingMessage", script.data)
         self.assertIn(b"createMessageActions", script.data)
@@ -61,6 +64,7 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"/api/push/subscriptions", script.data)
         self.assertIn(b"/api/reads", script.data)
         self.assertIn(b"/api/push/presence", script.data)
+        self.assertIn(b"/api/groups/", script.data)
         self.assertIn(b"setAppBadge", script.data)
         self.assertIn(b"/sw.js", script.data)
         self.assertIn(b"Add to Home Screen", script.data)
@@ -347,6 +351,74 @@ class ChatroomTests(unittest.TestCase):
         )
         self.assertEqual(invalid_reply_id.status_code, 400)
         self.assertEqual(self.client.get("/api/dms/9999").status_code, 404)
+
+    def test_group_chats_are_private_and_use_dm_names(self):
+        creator, creator_token = self.create_account()
+        member_client = self.app.test_client()
+        member, member_token = self.create_account(member_client)
+        third_client = self.app.test_client()
+        third, _third_token = self.create_account(third_client)
+        outsider_client = self.app.test_client()
+        outsider, outsider_token = self.create_account(outsider_client)
+
+        renamed = member_client.patch(
+            "/api/profile",
+            json={"display_name": "Member Fox"},
+            headers={"X-CSRF-Token": member_token},
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.json)
+
+        created = self.client.post(
+            "/api/groups",
+            json={"name": "Weekend plans", "member_ids": [member["id"], third["id"]]},
+            headers={"X-CSRF-Token": creator_token},
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+        group_id = created.json["id"]
+        self.assertEqual(created.json["name"], "Weekend plans")
+
+        creator_groups = self.client.get("/api/groups").json["groups"]
+        self.assertEqual(len(creator_groups), 1)
+        self.assertEqual(creator_groups[0]["members"], [
+            creator["username"], "Member Fox", third["username"],
+        ])
+        self.assertEqual(member_client.get("/api/groups").json["groups"][0]["name"], "Weekend plans")
+        self.assertEqual(outsider_client.get("/api/groups").json["groups"], [])
+        self.assertEqual(
+            outsider_client.get(f"/api/groups/{group_id}/messages").status_code,
+            404,
+        )
+        denied = outsider_client.post(
+            f"/api/groups/{group_id}/messages",
+            json={"text": "Not a member"},
+            headers={"X-CSRF-Token": outsider_token},
+        )
+        self.assertEqual(denied.status_code, 404)
+
+        sent = member_client.post(
+            f"/api/groups/{group_id}/messages",
+            json={"text": "Hello group"},
+            headers={"X-CSRF-Token": member_token},
+        )
+        self.assertEqual(sent.status_code, 201, sent.json)
+        message = self.client.get(f"/api/groups/{group_id}/messages").json["messages"][0]
+        self.assertEqual(message["text"], "Hello group")
+        self.assertEqual(message["username"], "Member Fox")
+        self.assertEqual(message["animal_username"], member["username"])
+        self.assertFalse(message["is_own"])
+
+    def test_group_chat_creation_validates_name_and_members(self):
+        _user, token = self.create_account()
+        headers = {"X-CSRF-Token": token}
+        for payload in (
+            {"name": "", "member_ids": [2, 3]},
+            {"name": "Too few", "member_ids": [2]},
+            {"name": "Bad id", "member_ids": [2, True]},
+            {"name": "Missing", "member_ids": [9998, 9999]},
+        ):
+            with self.subTest(payload=payload):
+                response = self.client.post("/api/groups", json=payload, headers=headers)
+                self.assertIn(response.status_code, {400, 404})
 
     def test_messages_skip_moderation_without_api_key(self):
         _user, token = self.create_account()
