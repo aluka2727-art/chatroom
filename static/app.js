@@ -17,9 +17,15 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.12.4";
+const APP_VERSION = "1.12.5";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.12.5": [
+    "Faster messaging and read receipts, with improved conversation loading.",
+    "Messages now show both the date and time.",
+    "Tap a message to reply or edit your own messages.",
+    "Log out from Settings, or choose Delete User to delete your account after confirmation and password verification.",
+  ],
   "1.12.4": [
     "Sign-in now works on devices that don't retain session cookies.",
   ],
@@ -340,6 +346,7 @@ function setAuthMode(mode) {
 }
 
 function showLogin() {
+  document.querySelector("#deleteUserDialog")?.close();
   clearInterval(pollingTimer);
   clearInterval(realtimeRefreshTimer);
   realtimeChannels.forEach(channel => realtimeClient?.removeChannel(channel));
@@ -760,16 +767,15 @@ function closeMessageMenu() {
   openMessageMenu = null;
 }
 
-function createMessageActions(message, { onReply, onEdit, canEdit }) {
+function createMessageActions(message, { onReply, onEdit, canEdit, trigger }) {
   const wrap = document.createElement("div");
   wrap.className = "message-actions";
-  const button = document.createElement("button");
-  button.className = "message-menu-button";
-  button.type = "button";
-  button.setAttribute("aria-label", "Message actions");
+  const button = trigger;
+  button.classList.add("message-interactive");
+  button.tabIndex = 0;
+  button.setAttribute("aria-label", `Message from ${message.username}. Open reply${canEdit ? " or edit" : ""} menu`);
   button.setAttribute("aria-haspopup", "menu");
   button.setAttribute("aria-expanded", "false");
-  button.innerHTML = '<span aria-hidden="true">···</span>';
   const menu = document.createElement("div");
   menu.className = "message-menu";
   menu.setAttribute("role", "menu");
@@ -801,7 +807,7 @@ function createMessageActions(message, { onReply, onEdit, canEdit }) {
     menu.append(editItem);
   }
 
-  button.addEventListener("click", event => {
+  const toggleMenu = event => {
     event.stopPropagation();
     const willOpen = menu.hidden;
     closeMessageMenu();
@@ -809,9 +815,20 @@ function createMessageActions(message, { onReply, onEdit, canEdit }) {
     menu.hidden = false;
     button.setAttribute("aria-expanded", "true");
     openMessageMenu = { button, menu };
+  };
+  button.addEventListener("click", event => {
+    if (event.target.closest("a, button, .message-menu")) return;
+    if (window.getSelection()?.toString()) return;
+    toggleMenu(event);
+  });
+  button.addEventListener("keydown", event => {
+    if (event.target !== button || !["Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    toggleMenu(event);
+    if (!menu.hidden) replyItem.focus();
   });
 
-  wrap.append(button, menu);
+  wrap.append(menu);
   return wrap;
 }
 
@@ -854,7 +871,7 @@ function addMessage(message) {
   const time = document.createElement("time");
   time.className = "message-time";
   time.dateTime = message.created_at;
-  time.textContent = new Date(message.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  time.textContent = new Date(message.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
   const text = document.createElement("p");
   text.className = "message-text";
   fillRichText(text, message.text);
@@ -876,6 +893,7 @@ function addMessage(message) {
   } else if (!message.pending && !message.is_deleted && message.username !== "[DELETED]") {
     const canEdit = Boolean(message.is_own) && Number.isInteger(message.id);
     meta.append(createMessageActions(message, {
+      trigger: article,
       canEdit,
       onReply: selectReply,
       onEdit: selectEdit,
@@ -1103,8 +1121,14 @@ function loadSupabaseSdk() {
   return supabaseSdkPromise;
 }
 
+let messagesReloadRequested = false;
 async function loadMessages() {
-  if (!currentUser || messagesLoading) return;
+  if (!currentUser) return;
+  if (messagesLoading) {
+    messagesReloadRequested = true;
+    return;
+  }
+  messagesReloadRequested = false;
   messagesLoading = true;
   try {
     const data = await api(`/api/messages?after=${messageCursor}`);
@@ -1135,7 +1159,7 @@ async function loadMessages() {
         scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth");
       }
     }
-    await syncReadState(data.unread);
+    syncReadState(data.unread);
     if (document.visibilityState === "visible") {
       const now = Date.now();
       if (now - presenceLastSentAt >= PRESENCE_MIN_INTERVAL_MS) {
@@ -1152,6 +1176,7 @@ async function loadMessages() {
   } finally {
     feed.querySelector(".loading-indicator")?.remove();
     messagesLoading = false;
+    if (messagesReloadRequested) loadMessages();
   }
 }
 
@@ -1392,7 +1417,6 @@ function selectDmContact(contact) {
   showDmError("");
   dmMessageError.hidden = true;
   loadDmMessages();
-  syncReadState(unreadState, true);
 }
 
 function addDmMessage(message) {
@@ -1416,7 +1440,7 @@ function addDmMessage(message) {
   const time = document.createElement("time");
   time.className = "message-time";
   time.dateTime = message.created_at;
-  time.textContent = new Date(message.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  time.textContent = new Date(message.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
   const text = document.createElement("p");
   text.className = "message-text";
   fillRichText(text, message.text);
@@ -1431,6 +1455,7 @@ function addDmMessage(message) {
   if (!message.pending && !message.send_error && message.reply_to !== undefined && message.username) {
     const canEdit = Boolean(message.is_own) && Number.isInteger(message.id);
     meta.append(createMessageActions(message, {
+      trigger: article,
       canEdit,
       onReply: selectDmReply,
       onEdit: selectDmEdit,
@@ -1444,8 +1469,14 @@ function addDmMessage(message) {
   else dmFeed.append(article);
 }
 
+let dmReloadRequested = false;
 async function loadDmMessages() {
-  if (!currentUser || !selectedDmUser || dmMessagesLoading) return;
+  if (!currentUser || !selectedDmUser) return;
+  if (dmMessagesLoading) {
+    dmReloadRequested = true;
+    return;
+  }
+  dmReloadRequested = false;
   const accountId = selectedDmUser.id;
   dmMessagesLoading = true;
   const showLoader = dmMessageCursor === 0 && !dmFeed.children.length;
@@ -1480,6 +1511,7 @@ async function loadDmMessages() {
         scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth", dmFeed);
       }
     }
+    if (initialLoad || messages.length) syncReadState(unreadState, true);
     showDmError("");
   } catch (error) {
     if (error.accountDeleted) {
@@ -1494,6 +1526,7 @@ async function loadDmMessages() {
       dmFeed.querySelector(".loading-indicator")?.remove();
     }
     dmMessagesLoading = false;
+    if (currentUser && selectedDmUser && (selectedDmUser.id !== accountId || dmReloadRequested)) loadDmMessages();
   }
 }
 
@@ -2091,6 +2124,61 @@ document.querySelector("#switchAccount").addEventListener("click", async () => {
     if (error.status === 401) showLogin();
   }
 });
+const deleteUserDialog = document.querySelector("#deleteUserDialog");
+const deleteUserConfirm = document.querySelector("#deleteUserConfirm");
+const deleteUserForm = document.querySelector("#deleteUserForm");
+const deleteUserPassword = document.querySelector("#deleteUserPassword");
+const deleteUserError = document.querySelector("#deleteUserError");
+const submitDeleteUser = document.querySelector("#submitDeleteUser");
+let deletingUser = false;
+document.querySelector("#deleteUser").addEventListener("click", () => {
+  deleteUserForm.reset();
+  deleteUserError.hidden = true;
+  deleteUserConfirm.hidden = false;
+  deleteUserForm.hidden = true;
+  deleteUserDialog.showModal();
+});
+document.querySelector("#confirmDeleteUser").addEventListener("click", () => {
+  deleteUserConfirm.hidden = true;
+  deleteUserForm.hidden = false;
+  deleteUserPassword.focus();
+});
+for (const id of ["cancelDeleteUser", "cancelDeleteUserPassword"]) {
+  document.querySelector(`#${id}`).addEventListener("click", () => {
+    if (!deletingUser) deleteUserDialog.close();
+  });
+}
+deleteUserDialog.addEventListener("cancel", event => {
+  if (deletingUser) event.preventDefault();
+});
+deleteUserDialog.addEventListener("close", () => deleteUserForm.reset());
+deleteUserForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  if (deletingUser) return;
+  deletingUser = true;
+  submitDeleteUser.disabled = true;
+  deleteUserError.hidden = true;
+  try {
+    await api("/api/account", {
+      method: "DELETE",
+      body: JSON.stringify({ password: deleteUserPassword.value }),
+    });
+    deleteUserDialog.close();
+    authToken = "";
+    try { localStorage.removeItem("pigin-auth-token"); } catch (error) {}
+    closeAppNotifications();
+    showLogin();
+    usernameInput.focus();
+  } catch (error) {
+    deleteUserPassword.value = "";
+    deleteUserError.textContent = error.message;
+    deleteUserError.hidden = false;
+    deleteUserPassword.focus();
+  } finally {
+    deletingUser = false;
+    submitDeleteUser.disabled = false;
+  }
+});
 pushToggle.addEventListener("click", togglePushNotifications);
 themeToggle.addEventListener("click", () => {
   applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
@@ -2423,7 +2511,11 @@ document.querySelector("#dmMessageForm").addEventListener("submit", async event 
 });
 document.addEventListener("click", () => closeMessageMenu());
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape") closeMessageMenu();
+  if (event.key === "Escape" && openMessageMenu) {
+    const trigger = openMessageMenu.button;
+    closeMessageMenu();
+    trigger.focus();
+  }
 });
 dmMessageInput.addEventListener("keydown", event => {
   if (event.key === "Enter" && !event.shiftKey) {

@@ -26,7 +26,7 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='bird-flap') }}">
   <script src="{{ url_for('static', filename='emoji-data.js', v='unicode-17.0') }}" defer></script>
-  <script src="{{ url_for('static', filename='app.js', v='1.12.4') }}" defer></script>
+  <script src="{{ url_for('static', filename='app.js', v='1.12.5') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -73,7 +73,6 @@
           </div>
           <div class="account-controls">
             <span class="animal-name" id="animalName"></span>
-            <button class="switch-account" id="switchAccount" type="button">Sign out</button>
           </div>
         </div>
       </section>
@@ -223,6 +222,14 @@
                 </div>
                 <button class="settings-toggle" id="themeToggle" type="button" aria-pressed="false">Dark mode off</button>
               </div>
+              <div class="settings-row">
+                <div class="settings-copy"><h3>Log out</h3><p>Sign out of PIGIN on this device.</p></div>
+                <button class="settings-toggle" id="switchAccount" type="button">Log out</button>
+              </div>
+              <div class="settings-row">
+                <div class="settings-copy"><h3>Delete User</h3><p>Permanently delete your account.</p></div>
+                <button class="settings-toggle" id="deleteUser" type="button">Delete User</button>
+              </div>
             </div>
           </section>
           <section class="admin-panel" id="adminPanel" aria-label="Admin controls" hidden>
@@ -242,6 +249,25 @@
         </div>
       </div>
     </main>
+    <dialog class="delete-user-dialog" id="deleteUserDialog" aria-labelledby="deleteUserTitle">
+      <h2 id="deleteUserTitle">Delete User</h2>
+      <div id="deleteUserConfirm">
+        <p>Are you sure you want to delete your account? This cannot be undone. Your World Chat messages will show as [DELETED], and your direct messages will be removed.</p>
+        <div class="delete-user-actions">
+          <button class="settings-toggle" id="cancelDeleteUser" type="button" autofocus>No, cancel</button>
+          <button class="settings-toggle" id="confirmDeleteUser" type="button">Yes, continue</button>
+        </div>
+      </div>
+      <form id="deleteUserForm" hidden>
+        <label class="field-label" for="deleteUserPassword">Enter your password to delete your account</label>
+        <input class="auth-input" id="deleteUserPassword" type="password" autocomplete="current-password" required>
+        <p class="composer-error" id="deleteUserError" role="alert" hidden></p>
+        <div class="delete-user-actions">
+          <button class="settings-toggle" id="cancelDeleteUserPassword" type="button">Cancel</button>
+          <button class="settings-toggle" id="submitDeleteUser" type="submit">Delete User</button>
+        </div>
+      </form>
+    </dialog>
     <div class="warning-screen" id="warningScreen" role="alertdialog" aria-modal="true" aria-labelledby="warningTitle" aria-describedby="warningText" hidden>
       <section class="warning-panel">
         <div class="login-mark warning-mark" aria-hidden="true">!</div>
@@ -258,7 +284,7 @@
         <button class="login-submit" id="versionNotesAction" type="button">Got it</button>
       </section>
     </div>
-    <footer class="app-footer">v1.12.4</footer>
+    <footer class="app-footer">v1.12.5</footer>
   </div>
   <div class="app-loading" id="appLoading" role="status" aria-label="Loading PIGIN">
     <div class="loading-indicator">

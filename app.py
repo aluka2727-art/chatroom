@@ -11,6 +11,8 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from threading import BoundedSemaphore
 from functools import wraps
 from pathlib import Path
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -318,6 +320,18 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
+    # Tests can run delivery inline; production never waits on a push provider.
+    app.config.setdefault("PUSH_ASYNC", not app.testing)
+    # A device always uses the same serial queue, keeping read-sync updates
+    # behind earlier message alerts while other devices deliver concurrently.
+    push_executors = [
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"push-{index}")
+        for index in range(4)
+    ]
+    push_slots = BoundedSemaphore(128)
+    app.extensions["push_executors"] = push_executors
+    for executor in push_executors:
+        atexit.register(executor.shutdown, wait=False)
     database_setting = str((test_config or {}).get("DATABASE") or "")
     supabase_url = str(app.config.get("SUPABASE_DB_URL") or "")
     if database_setting.startswith("postgres"):
@@ -689,7 +703,9 @@ def create_app(test_config=None):
 
     @app.after_request
     def prevent_private_caching(response):
-        response.headers["Cache-Control"] = "no-store"
+        response.headers["Cache-Control"] = (
+            "no-cache" if request.endpoint == "static" else "no-store"
+        )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         return response
@@ -855,38 +871,53 @@ def create_app(test_config=None):
             (account_id,),
         ).fetchall()
         body = json.dumps(payload)
-        expired_ids = []
+        # Copy rows before submitting. Workers do no database work until an
+        # expired subscription needs cleanup, so network waits hold no DB lease.
         for subscription in subscriptions:
+            subscription = dict(subscription)
             if subscription["endpoint"] in visible:
                 continue
+            if not app.config["PUSH_ASYNC"]:
+                deliver_subscription(subscription, body)
+                continue
+            if not push_slots.acquire(blocking=False):
+                app.logger.warning("Push queue full; skipping delivery")
+                continue
             try:
-                webpush(
-                    subscription_info={
-                        "endpoint": subscription["endpoint"],
-                        "keys": {
-                            "p256dh": subscription["p256dh"],
-                            "auth": subscription["auth"],
-                        },
-                    },
-                    data=body,
-                    vapid_private_key=app.config["VAPID_PRIVATE_KEY_FILE"],
-                    vapid_claims={"sub": app.config["VAPID_SUBJECT"]},
-                    ttl=60,
-                )
-            except WebPushException as error:
-                status_code = getattr(getattr(error, "response", None), "status_code", None)
-                if status_code in {404, 410}:
-                    expired_ids.append(subscription["id"])
-                else:
-                    app.logger.warning("Push delivery failed: %s", error)
+                shard = hashlib.sha256(subscription["endpoint"].encode()).digest()[0] % len(push_executors)
+                future = push_executors[shard].submit(deliver_subscription, subscription, body)
+                future.add_done_callback(lambda _future: push_slots.release())
             except Exception:
-                app.logger.exception("Unexpected push delivery failure")
-        if expired_ids:
-            database.executemany(
-                "DELETE FROM push_subscriptions WHERE id = ?",
-                ((sid,) for sid in expired_ids),
+                push_slots.release()
+                raise
+
+    def deliver_subscription(subscription, body):
+        try:
+            webpush(
+                subscription_info={
+                    "endpoint": subscription["endpoint"],
+                    "keys": {"p256dh": subscription["p256dh"], "auth": subscription["auth"]},
+                },
+                data=body,
+                vapid_private_key=app.config["VAPID_PRIVATE_KEY_FILE"],
+                vapid_claims={"sub": app.config["VAPID_SUBJECT"]},
+                ttl=60,
+                timeout=5,
             )
-            database.commit()
+        except WebPushException as error:
+            status_code = getattr(getattr(error, "response", None), "status_code", None)
+            if status_code in {404, 410}:
+                with app.app_context():
+                    database = get_db()
+                    database.execute(
+                        "DELETE FROM push_subscriptions WHERE id = ? AND endpoint = ?",
+                        (subscription["id"], subscription["endpoint"]),
+                    )
+                    database.commit()
+            else:
+                app.logger.warning("Push delivery failed: %s", error)
+        except Exception:
+            app.logger.exception("Unexpected push delivery failure")
 
     def send_read_sync(database, account_id, *, clear_tags=None, clear_all=False):
         summary = unread_payload(database, account_id)
@@ -918,6 +949,7 @@ def create_app(test_config=None):
                 """,
                 (account_id, max(message_id - 1, 0)),
             )
+            database.commit()
             unread = unread_payload(database, account_id)
             deliver_push(
                 database,
@@ -956,7 +988,7 @@ def create_app(test_config=None):
         def wrapped(*args, **kwargs):
             account = get_current_account()
             if account is None:
-                account_id = session.get("account_id")
+                account_id = auth_token_account_id() or session.get("account_id")
                 deleted = None
                 if isinstance(account_id, int):
                     deleted = get_db().execute(
@@ -1147,6 +1179,27 @@ def create_app(test_config=None):
             csrf_token=token,
             auth_token=auth_token_for(account_id),
         ), 201 if mode == "create" else 200
+
+    @app.delete("/api/account")
+    @login_required
+    def api_delete_own_account():
+        data = request.get_json(silent=True) or {}
+        password = data.get("password")
+        if not isinstance(password, str) or not password:
+            return jsonify(error="Enter your password to delete your account."), 400
+        database = get_db()
+        account = database.execute(
+            "SELECT id, username, display_name, role, password_hash FROM accounts WHERE id = ?",
+            (g.account["id"],),
+        ).fetchone()
+        if account["role"] == "admin" or account["username"].casefold() == "cricket":
+            return jsonify(error="Admin accounts cannot be deleted."), 403
+        if not check_password_hash(account["password_hash"], password):
+            return jsonify(error="Incorrect password. Your account was not deleted."), 403
+        tombstone_account(database, account)
+        database.commit()
+        session.clear()
+        return jsonify(ok=True)
 
     @app.post("/api/logout")
     def api_logout():
@@ -1459,15 +1512,17 @@ def create_app(test_config=None):
             """
             SELECT a.id, a.username, a.display_name, a.avatar_ext,
                    d.body AS last_message, d.created_at AS last_message_at
-            FROM accounts AS a
-            JOIN direct_messages AS d ON d.id = (
-                SELECT latest.id
-                FROM direct_messages AS latest
-                WHERE (latest.sender_id = ? AND latest.recipient_id = a.id)
-                   OR (latest.sender_id = a.id AND latest.recipient_id = ?)
-                ORDER BY latest.id DESC
-                LIMIT 1
-            )
+            FROM (
+                SELECT partner_id, MAX(id) AS last_id
+                FROM (
+                    SELECT recipient_id AS partner_id, id FROM direct_messages WHERE sender_id = ?
+                    UNION ALL
+                    SELECT sender_id AS partner_id, id FROM direct_messages WHERE recipient_id = ?
+                ) AS own_messages
+                GROUP BY partner_id
+            ) AS conversations
+            JOIN accounts AS a ON a.id = conversations.partner_id
+            JOIN direct_messages AS d ON d.id = conversations.last_id
             WHERE a.id != ?
             ORDER BY d.id DESC,
                      COALESCE(a.display_name, a.username) COLLATE NOCASE
@@ -1566,7 +1621,7 @@ def create_app(test_config=None):
                     OR (
                       ? != ''
                       AND d.edited_at IS NOT NULL
-                      AND d.edited_at > ?
+                      AND d.edited_at >= ?
                       AND d.id <= ?
                     )
                   )

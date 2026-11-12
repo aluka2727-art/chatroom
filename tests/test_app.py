@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import time
+from threading import Event
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -33,7 +34,7 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.12.2", page.data)
+        self.assertIn(b"v1.12.5", page.data)
         self.assertIn(b"id=\"versionNotesScreen\"", page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
@@ -46,7 +47,7 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"id=\"dmSearchInput\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
         self.assertIn(b"id=\"themeToggle\"", page.data)
-        self.assertIn(b'APP_VERSION = "1.12.2"', script.data)
+        self.assertIn(b'APP_VERSION = "1.12.5"', script.data)
         self.assertIn(b"Couldn't send, inappropriate language", script.data)
         self.assertIn(b"promotePendingMessage", script.data)
         self.assertIn(b"createMessageActions", script.data)
@@ -78,6 +79,14 @@ class ChatroomTests(unittest.TestCase):
         share = self.client.get("/share?url=https://youtu.be/dQw4w9WgXcQ")
         self.assertEqual(share.status_code, 200)
         self.assertIn(b"World Chat", share.data)
+
+    def test_static_assets_revalidate_while_private_responses_are_not_cached(self):
+        with self.client.get("/static/app.js") as response:
+            self.assertEqual(response.headers["Cache-Control"], "no-cache")
+            etag = response.headers["ETag"]
+        with self.client.get("/static/app.js", headers={"If-None-Match": etag}) as response:
+            self.assertEqual(response.status_code, 304)
+        self.assertEqual(self.client.get("/api/session").headers["Cache-Control"], "no-store")
 
     def test_complete_unicode_emoji_picker_data_is_served(self):
         page = self.client.get("/")
@@ -486,6 +495,12 @@ class ChatroomTests(unittest.TestCase):
         )
         self.assertEqual(dm_edit.status_code, 200)
         self.assertTrue(dm_edit.json["edited"])
+        # A sync and edit can share a millisecond; include that boundary.
+        with sqlite3.connect(self.database_path) as database:
+            database.execute(
+                "UPDATE direct_messages SET edited_at = ? WHERE id = ?",
+                (first_read["server_time"], dm_id),
+            )
         synced = other_client.get(
             f"/api/dms/{author['id']}?after={first_read['cursor']}&since={first_read['server_time']}"
         ).json
@@ -748,6 +763,51 @@ class ChatroomTests(unittest.TestCase):
         with sqlite3.connect(self.database_path) as database:
             remaining = database.execute("SELECT username, role FROM accounts").fetchall()
         self.assertEqual(remaining, [("Viper", "admin")])
+
+    def test_self_delete_requires_password_and_uses_admin_deletion_behavior(self):
+        member, token = self.create_account()
+        other_client = self.app.test_client()
+        other, other_token = self.create_account(other_client)
+        login = other_client.post(
+            "/api/auth", json={"mode": "signin", "username": member["username"],
+                                "password": "correct-horse-battery"},
+            headers={"X-CSRF-Token": other_token},
+        )
+        bearer = login.json["auth_token"]
+        headers = {"X-CSRF-Token": token}
+        self.client.patch("/api/profile", json={"display_name": "Reserved Self"}, headers=headers)
+        self.client.post("/api/messages", json={"text": "My room message"}, headers=headers)
+        self.client.post(f"/api/dms/{other['id']}", json={"text": "My private message"}, headers=headers)
+        for password, status in [(None, 400), (123, 400), ("", 400), ("wrong-password", 403)]:
+            rejected = self.client.delete("/api/account", json={"password": password}, headers=headers)
+            self.assertEqual(rejected.status_code, status)
+            self.assertIsNotNone(self.client.get("/api/session").json["user"])
+        rejected = self.client.delete("/api/account", json={"password": "correct-horse-battery"})
+        self.assertEqual(rejected.status_code, 400, "deletion requires CSRF protection")
+        deleted = self.client.delete(
+            "/api/account", json={"password": "correct-horse-battery"}, headers=headers,
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.json)
+        self.assertIsNone(self.client.get("/api/session").json["user"])
+        with sqlite3.connect(self.database_path) as database:
+            self.assertIsNone(database.execute("SELECT id FROM accounts WHERE id = ?", (member["id"],)).fetchone())
+            self.assertEqual(database.execute("SELECT body, author_id FROM messages").fetchone(), ("[DELETED]", None))
+            self.assertEqual(database.execute("SELECT COUNT(*) FROM direct_messages").fetchone()[0], 0)
+            self.assertEqual(database.execute("SELECT username, display_name FROM deleted_accounts WHERE account_id = ?", (member["id"],)).fetchone(), (member["username"], "Reserved Self"))
+        self.assertTrue(other_client.get("/api/session").json["account_deleted"])
+        token_client = self.app.test_client()
+        expired = token_client.get("/api/messages", headers={"Authorization": f"Bearer {bearer}"})
+        self.assertEqual(expired.status_code, 410)
+        self.assertTrue(expired.json["account_deleted"])
+
+    def test_self_delete_preserves_admin_account_protection(self):
+        client, token = self.create_admin()
+        response = client.delete(
+            "/api/account", json={"password": "admin-password-123"},
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIsNotNone(client.get("/api/session").json["user"])
 
     def test_admin_account_delete_tombstones_messages_and_keeps_name_reserved(self):
         admin_client, _admin_token = self.create_admin()
@@ -1077,6 +1137,49 @@ class ChatroomTests(unittest.TestCase):
             headers={"X-CSRF-Token": second_token},
         )
         self.assertEqual(rejected.status_code, 400)
+
+    def test_slow_push_does_not_block_messages_reads_or_database_writes(self):
+        recipient, recipient_token = self.create_account()
+        sender_client = self.app.test_client()
+        _sender, sender_token = self.create_account(sender_client)
+        self.enable_push(self.client, "https://push.example.test/phone")
+        self.app.config["PUSH_ASYNC"] = True
+        started, release = Event(), Event()
+
+        def blocked_push(**kwargs):
+            self.assertEqual(kwargs["timeout"], 5)
+            started.set()
+            release.wait(5)
+
+        with patch("app.webpush", side_effect=blocked_push):
+            try:
+                sent = sender_client.post(
+                    f"/api/dms/{recipient['id']}", json={"text": "Fast message"},
+                    headers={"X-CSRF-Token": sender_token},
+                )
+                self.assertEqual(sent.status_code, 201)
+                self.assertTrue(started.wait(1))
+                self.assertFalse(release.is_set())
+                messages = self.client.get(f"/api/dms/{_sender['id']}")
+                self.assertEqual(messages.json["messages"][-1]["text"], "Fast message")
+                marked = self.client.post(
+                    "/api/reads", json={"kind": "dm", "partner_id": _sender["id"]},
+                    headers={"X-CSRF-Token": recipient_token},
+                )
+                self.assertEqual(marked.status_code, 200)
+                self.assertEqual(marked.json["total"], 0)
+                # Room fan-out must not retain SQLite's write lock either.
+                room = sender_client.post(
+                    "/api/messages", json={"text": "Fast room message"},
+                    headers={"X-CSRF-Token": sender_token},
+                )
+                self.assertEqual(room.status_code, 201)
+                with sqlite3.connect(self.database_path, timeout=0.1) as database:
+                    database.execute("UPDATE accounts SET role = role")
+            finally:
+                release.set()
+                for executor in self.app.extensions["push_executors"]:
+                    executor.shutdown(wait=True)
 
     def test_marking_read_syncs_notifications_across_devices(self):
         recipient, recipient_token = self.create_account()

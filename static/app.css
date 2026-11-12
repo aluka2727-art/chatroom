@@ -401,7 +401,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .message-avatar.has-image { background: transparent; }
 .message-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .message-content { min-width: 0; }
-.message-meta { display: flex; align-items: baseline; gap: 8px; min-height: 19px; }
+.message-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-height: 19px; }
 .message-author { font-size: 12px; font-weight: 700; }
 .message-author.deleted { color: var(--faint); font-weight: 500; }
 .message-time { color: var(--faint); font-size: 10px; }
@@ -412,30 +412,13 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .message-image { display: block; width: 100%; max-height: 280px; object-fit: contain; border-radius: 6px; background: var(--hover); }
 .message-edited { color: var(--faint); font-size: 10px; font-style: italic; }
 .message-actions { position: relative; margin-left: auto; }
-.message-menu-button {
-  display: grid;
-  place-items: center;
-  min-width: 22px;
-  min-height: 22px;
-  padding: 0 4px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--quote-text);
-  font: 700 12px "Space Grotesk", sans-serif;
-  letter-spacing: 0.08em;
-  line-height: 1;
-  cursor: pointer;
-}
-.message-menu-button:hover,
-.message-menu-button[aria-expanded="true"] {
-  background: var(--hover);
-  color: var(--ink);
-}
+.message-interactive { cursor: pointer; }
+.message-interactive[aria-expanded="true"] { position: relative; z-index: 9; }
+.message-interactive:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
 .message-menu {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 4px);
+  top: 4px;
   z-index: 8;
   display: grid;
   min-width: 112px;
@@ -702,3 +685,10 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 @media (prefers-reduced-motion: reduce) {
   .loading-pigeon, .whats-new-mark { animation: none; }
 }
+
+.delete-user-dialog { width: min(420px, calc(100% - 32px)); box-sizing: border-box; padding: 24px; border: 1px solid var(--field-border); border-radius: 12px; background: var(--surface); color: var(--ink); }
+.delete-user-dialog::backdrop { background: #0008; }
+.delete-user-dialog h2 { margin: 0 0 16px; font-size: 20px; }
+.delete-user-dialog p { font-size: 13px; line-height: 1.5; }
+.delete-user-dialog .auth-input { width: 100%; box-sizing: border-box; margin-top: 10px; }
+.delete-user-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
