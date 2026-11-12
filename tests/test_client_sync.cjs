@@ -9,8 +9,9 @@ const dmLoader = source.slice(source.indexOf('let dmReloadRequested = false;'), 
 function client() {
   const requests = [];
   const context = vm.createContext({
-    currentUser: { id: 10 }, selectedDmUser: { id: 1 },
+    currentUser: { id: 10 }, selectedDmUser: { id: 1 }, selectedDmGroup: null,
     dmMessagesLoading: false, dmMessageCursor: 0, dmPollSince: '',
+    loadGroupMessages() {},
     dmFeed: { children: [1], querySelector: () => null, replaceChildren() {} },
     document: { createElement: () => ({}) },
     showDmError() {}, syncReadState() {}, unreadState: {},

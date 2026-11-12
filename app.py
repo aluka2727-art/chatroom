@@ -536,6 +536,8 @@ def create_app(test_config=None):
                 group_id INTEGER NOT NULL REFERENCES group_chats(id) ON DELETE CASCADE,
                 author_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
                 body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500),
+                reply_to_id INTEGER REFERENCES group_messages(id) ON DELETE SET NULL,
+                edited_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             );
             CREATE INDEX IF NOT EXISTS group_messages_group_idx
@@ -645,6 +647,15 @@ def create_app(test_config=None):
             )
         if "edited_at" not in direct_message_columns:
             database.execute("ALTER TABLE direct_messages ADD COLUMN edited_at TEXT")
+        group_message_columns = {
+            row["name"] for row in database.execute("PRAGMA table_info(group_messages)")
+        }
+        if "reply_to_id" not in group_message_columns:
+            database.execute(
+                "ALTER TABLE group_messages ADD COLUMN reply_to_id INTEGER REFERENCES group_messages(id) ON DELETE SET NULL"
+            )
+        if "edited_at" not in group_message_columns:
+            database.execute("ALTER TABLE group_messages ADD COLUMN edited_at TEXT")
         database.executescript(
             """
             CREATE TRIGGER IF NOT EXISTS messages_insert_event
@@ -1866,6 +1877,13 @@ def create_app(test_config=None):
                     public_name_from(member["username"], member["display_name"])
                     for member in members
                 ],
+                "member_accounts": [
+                    {
+                        "id": member["id"],
+                        "name": public_name_from(member["username"], member["display_name"]),
+                    }
+                    for member in members
+                ],
             })
         return jsonify(groups=payload)
 
@@ -1913,6 +1931,75 @@ def create_app(test_config=None):
         database.commit()
         return jsonify(id=group_id, name=name), 201
 
+    @app.patch("/api/groups/<int:group_id>")
+    @login_required
+    def api_rename_group_chat(group_id):
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify(error="Group details are required."), 400
+        name = data.get("name", "")
+        if not isinstance(name, str):
+            return jsonify(error="Group name must be text."), 400
+        name = name.strip()
+        if not name or len(name) > MAX_GROUP_NAME_LENGTH:
+            return jsonify(error=f"Group names must be between 1 and {MAX_GROUP_NAME_LENGTH} characters."), 400
+
+        database = get_db()
+        if database.execute(
+            "SELECT 1 FROM group_members WHERE group_id = ? AND account_id = ?",
+            (group_id, g.account["id"]),
+        ).fetchone() is None:
+            return jsonify(error="Group chat not found."), 404
+        database.execute("UPDATE group_chats SET name = ? WHERE id = ?", (name, group_id))
+        database.commit()
+        return jsonify(id=group_id, name=name)
+
+    @app.post("/api/groups/<int:group_id>/members")
+    @login_required
+    def api_add_group_member(group_id):
+        data = request.get_json(silent=True)
+        account_id = data.get("account_id") if isinstance(data, dict) else None
+        if type(account_id) is not int or account_id < 1:
+            return jsonify(error="Choose a valid person to add."), 400
+
+        database = get_db()
+        if database.execute(
+            "SELECT 1 FROM group_members WHERE group_id = ? AND account_id = ?",
+            (group_id, g.account["id"]),
+        ).fetchone() is None:
+            return jsonify(error="Group chat not found."), 404
+        if database.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
+            return jsonify(error="Account not found."), 404
+        database.execute(
+            "INSERT INTO group_members (group_id, account_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+            (group_id, account_id),
+        )
+        database.commit()
+        return jsonify(ok=True)
+
+    @app.delete("/api/groups/<int:group_id>/members/<int:account_id>")
+    @login_required
+    def api_remove_group_member(group_id, account_id):
+        database = get_db()
+        if database.execute(
+            "SELECT 1 FROM group_members WHERE group_id = ? AND account_id = ?",
+            (group_id, g.account["id"]),
+        ).fetchone() is None:
+            return jsonify(error="Group chat not found."), 404
+        removed = database.execute(
+            "DELETE FROM group_members WHERE group_id = ? AND account_id = ?",
+            (group_id, account_id),
+        )
+        if removed.rowcount == 0:
+            return jsonify(error="Group member not found."), 404
+        if database.execute(
+            "SELECT 1 FROM group_members WHERE group_id = ? LIMIT 1",
+            (group_id,),
+        ).fetchone() is None:
+            database.execute("DELETE FROM group_chats WHERE id = ?", (group_id,))
+        database.commit()
+        return jsonify(ok=True)
+
     @app.get("/api/groups/<int:group_id>/messages")
     @login_required
     def api_group_messages(group_id):
@@ -1926,27 +2013,59 @@ def create_app(test_config=None):
             after_id = max(0, int(request.args.get("after", "0")))
         except ValueError:
             return jsonify(error="Invalid message cursor."), 400
+        since = request.args.get("since", "")
+        if not isinstance(since, str):
+            return jsonify(error="Invalid sync cursor."), 400
+        since = since.strip()
+        server_time = database.execute(
+            "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS server_time"
+        ).fetchone()["server_time"]
         if after_id:
             rows = database.execute(
                 """
-                SELECT gm.id, gm.author_id, gm.body, gm.created_at,
-                       a.username, a.display_name, a.avatar_ext
+                SELECT gm.id, gm.author_id, gm.body, gm.created_at, gm.edited_at,
+                       a.username, a.display_name, a.avatar_ext,
+                       replied.id AS reply_id, replied.body AS reply_body,
+                       replied_author.id AS reply_author_id,
+                       replied_author.username AS reply_username,
+                       replied_author.display_name AS reply_display_name,
+                       replied_author.avatar_ext AS reply_avatar_ext
                 FROM group_messages AS gm
                 LEFT JOIN accounts AS a ON a.id = gm.author_id
-                WHERE gm.group_id = ? AND gm.id > ?
+                LEFT JOIN group_messages AS replied
+                  ON replied.id = gm.reply_to_id AND replied.group_id = gm.group_id
+                LEFT JOIN accounts AS replied_author ON replied_author.id = replied.author_id
+                WHERE gm.group_id = ?
+                  AND (
+                    gm.id > ?
+                    OR (
+                      ? != ''
+                      AND gm.edited_at IS NOT NULL
+                      AND gm.edited_at >= ?
+                      AND gm.id <= ?
+                    )
+                  )
                 ORDER BY gm.id ASC
                 LIMIT 100
                 """,
-                (group_id, after_id),
+                (group_id, after_id, since, since, after_id),
             ).fetchall()
         else:
             rows = database.execute(
                 """
                 SELECT * FROM (
-                    SELECT gm.id, gm.author_id, gm.body, gm.created_at,
-                           a.username, a.display_name, a.avatar_ext
+                    SELECT gm.id, gm.author_id, gm.body, gm.created_at, gm.edited_at,
+                           a.username, a.display_name, a.avatar_ext,
+                           replied.id AS reply_id, replied.body AS reply_body,
+                           replied_author.id AS reply_author_id,
+                           replied_author.username AS reply_username,
+                           replied_author.display_name AS reply_display_name,
+                           replied_author.avatar_ext AS reply_avatar_ext
                     FROM group_messages AS gm
                     LEFT JOIN accounts AS a ON a.id = gm.author_id
+                    LEFT JOIN group_messages AS replied
+                      ON replied.id = gm.reply_to_id AND replied.group_id = gm.group_id
+                    LEFT JOIN accounts AS replied_author ON replied_author.id = replied.author_id
                     WHERE gm.group_id = ?
                     ORDER BY gm.id DESC LIMIT 100
                 ) ORDER BY id ASC
@@ -1963,6 +2082,21 @@ def create_app(test_config=None):
                 deleted=row["username"] is None,
                 use_profile=True,
             )
+            reply_to = None
+            if row["reply_id"] is not None:
+                reply_author = author_fields(
+                    row["reply_username"],
+                    row["reply_display_name"],
+                    row["reply_author_id"],
+                    row["reply_avatar_ext"],
+                    deleted=row["reply_username"] is None,
+                    use_profile=True,
+                )
+                reply_to = {
+                    "id": row["reply_id"],
+                    "username": reply_author["username"],
+                    "text": "[DELETED]" if row["reply_username"] is None else row["reply_body"],
+                }
             messages.append({
                 "id": row["id"],
                 "username": author["username"],
@@ -1972,9 +2106,11 @@ def create_app(test_config=None):
                 "text": row["body"],
                 "created_at": row["created_at"],
                 "is_own": row["author_id"] == g.account["id"],
+                "edited": bool(row["edited_at"]),
+                "reply_to": reply_to,
             })
-        cursor = max((message["id"] for message in messages), default=after_id)
-        return jsonify(messages=messages, cursor=cursor)
+        cursor = max((message["id"] for message in messages if message["id"] > after_id), default=after_id)
+        return jsonify(messages=messages, cursor=cursor, server_time=server_time)
 
     @app.post("/api/groups/<int:group_id>/messages")
     @login_required
@@ -2001,13 +2137,73 @@ def create_app(test_config=None):
             (group_id, g.account["id"]),
         ).fetchone() is None:
             return jsonify(error="Group chat not found."), 404
+        reply_to_id = data.get("reply_to_id")
+        if reply_to_id is not None:
+            if type(reply_to_id) is not int or reply_to_id < 1:
+                return jsonify(error="Invalid reply target."), 400
+            reply_to = database.execute(
+                "SELECT id FROM group_messages WHERE id = ? AND group_id = ?",
+                (reply_to_id, group_id),
+            ).fetchone()
+            if reply_to is None:
+                return jsonify(error="This message is not part of this group chat."), 400
         cursor = database.execute(
-            "INSERT INTO group_messages (group_id, author_id, body) VALUES (?, ?, ?) RETURNING id",
-            (group_id, g.account["id"], text),
+            "INSERT INTO group_messages (group_id, author_id, body, reply_to_id) VALUES (?, ?, ?, ?) RETURNING id",
+            (group_id, g.account["id"], text, reply_to_id),
         )
         message_id = inserted_id(cursor)
         database.commit()
         return jsonify(id=message_id), 201
+
+    @app.patch("/api/groups/<int:group_id>/messages/<int:message_id>")
+    @login_required
+    def api_edit_group_message(group_id, message_id):
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify(error="Message details are required."), 400
+        text = data.get("text", "")
+        if not isinstance(text, str):
+            return jsonify(error="Message must be text."), 400
+        text = text.strip()
+        if not text or len(text) > MAX_MESSAGE_LENGTH:
+            return jsonify(error="Messages must be between 1 and 500 characters."), 400
+        try:
+            moderation_error = moderate_message(text, app.config.get("OPENAI_API_KEY", ""))
+        except ModerationUnavailable:
+            return jsonify(error="Moderation is temporarily unavailable. Try again."), 503
+        if moderation_error:
+            return jsonify(error=moderation_error), 400
+
+        database = get_db()
+        if database.execute(
+            "SELECT 1 FROM group_members WHERE group_id = ? AND account_id = ?",
+            (group_id, g.account["id"]),
+        ).fetchone() is None:
+            return jsonify(error="Group chat not found."), 404
+        message = database.execute(
+            """
+            SELECT author_id, body, edited_at
+            FROM group_messages
+            WHERE group_id = ? AND id = ?
+            """,
+            (group_id, message_id),
+        ).fetchone()
+        if message is None:
+            return jsonify(error="Message not found."), 404
+        if message["author_id"] != g.account["id"]:
+            return jsonify(error="You can only edit your own messages."), 403
+        if message["body"] == text:
+            return jsonify(id=message_id, edited=bool(message["edited_at"]))
+        database.execute(
+            """
+            UPDATE group_messages
+            SET body = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE group_id = ? AND id = ?
+            """,
+            (text, group_id, message_id),
+        )
+        database.commit()
+        return jsonify(id=message_id, edited=True)
 
     @app.patch("/api/profile")
     @login_required

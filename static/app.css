@@ -320,6 +320,20 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .group-create-panel .settings-toggle { justify-self: start; }
 .group-member-results { display: grid; max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
 .group-member-results:empty { display: none; }
+.group-management { display: grid; gap: 10px; padding: 10px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.group-management[hidden] { display: none; }
+.group-management-rename, .group-management-add { display: grid; gap: 6px; }
+.group-management .field-label { margin: 0; }
+.group-management-row { display: flex; gap: 8px; }
+.group-management-row .auth-input { min-width: 0; flex: 1; }
+.group-management-row .settings-toggle { flex: 0 0 auto; }
+.group-management-members { display: grid; gap: 5px; }
+.group-member-list { display: grid; gap: 4px; }
+.group-member-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink); font-size: 11px; }
+.group-member-remove { flex: 0 0 auto; padding: 4px 7px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; }
+.group-member-remove:hover { color: var(--green); }
+.group-manage-toggle { margin-left: auto; padding: 6px 9px; font-size: 10px; }
+.group-manage-toggle[hidden] { display: none; }
 .dm-section-heading { margin: 2px 4px -4px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .dm-contacts { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); scrollbar-color: var(--scrollbar) transparent; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
 .dm-group-contacts { flex: 0 1 auto; max-height: 22vh; }

@@ -34,7 +34,7 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.12.6", page.data)
+        self.assertIn(b"v1.12.7", page.data)
         self.assertIn(b"id=\"versionNotesScreen\"", page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
@@ -47,10 +47,12 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"id=\"dmSearchInput\"", page.data)
         self.assertIn(b"id=\"newGroupButton\"", page.data)
         self.assertIn(b"id=\"groupCreatePanel\"", page.data)
+        self.assertIn(b"id=\"groupManagement\"", page.data)
+        self.assertIn(b"id=\"groupManageToggle\"", page.data)
         self.assertIn(b"id=\"dmGroupContacts\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
         self.assertIn(b"id=\"themeToggle\"", page.data)
-        self.assertIn(b'APP_VERSION = "1.12.6"', script.data)
+        self.assertIn(b'APP_VERSION = "1.12.7"', script.data)
         self.assertIn(b"Couldn't send, inappropriate language", script.data)
         self.assertIn(b"promotePendingMessage", script.data)
         self.assertIn(b"createMessageActions", script.data)
@@ -65,6 +67,7 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"/api/reads", script.data)
         self.assertIn(b"/api/push/presence", script.data)
         self.assertIn(b"/api/groups/", script.data)
+        self.assertIn(b"/messages/${editSnapshot.id}", script.data)
         self.assertIn(b"setAppBadge", script.data)
         self.assertIn(b"/sw.js", script.data)
         self.assertIn(b"Add to Home Screen", script.data)
@@ -221,10 +224,33 @@ class ChatroomTests(unittest.TestCase):
                     body TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE group_chats (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    creator_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE group_members (
+                    group_id INTEGER NOT NULL REFERENCES group_chats(id) ON DELETE CASCADE,
+                    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                    PRIMARY KEY (group_id, account_id)
+                );
+                CREATE TABLE group_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER NOT NULL REFERENCES group_chats(id) ON DELETE CASCADE,
+                    author_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+                    body TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 INSERT INTO accounts (username, password_hash, created_at)
                     VALUES ('Otter', 'hash', '2026-01-01T00:00:00Z');
                 INSERT INTO messages (author_id, body, created_at)
                     VALUES (1, 'Existing message', '2026-01-01T00:00:00Z');
+                INSERT INTO group_chats (name, creator_id, created_at)
+                    VALUES ('Old group', 1, '2026-01-01T00:00:00Z');
+                INSERT INTO group_members (group_id, account_id) VALUES (1, 1);
+                INSERT INTO group_messages (group_id, author_id, body, created_at)
+                    VALUES (1, 1, 'Old group message', '2026-01-01T00:00:00Z');
                 """
             )
 
@@ -242,16 +268,25 @@ class ChatroomTests(unittest.TestCase):
             direct_message_columns = {
                 row[1] for row in database.execute("PRAGMA table_info(direct_messages)")
             }
+            group_message_columns = {
+                row[1] for row in database.execute("PRAGMA table_info(group_messages)")
+            }
             existing_message = database.execute(
                 "SELECT body, reply_to_id FROM messages WHERE id = 1"
             ).fetchone()
             direct_message_reply = database.execute(
                 "SELECT reply_to_id FROM direct_messages"
             ).fetchone()
+            group_message_fields = database.execute(
+                "SELECT reply_to_id, edited_at FROM group_messages WHERE id = 1"
+            ).fetchone()
         self.assertIn("reply_to_id", columns)
         self.assertIn("reply_to_id", direct_message_columns)
+        self.assertIn("reply_to_id", group_message_columns)
+        self.assertIn("edited_at", group_message_columns)
         self.assertEqual(existing_message, ("Existing message", None))
         self.assertIsNone(direct_message_reply)
+        self.assertEqual(group_message_fields, (None, None))
 
     def test_direct_messages_are_private_and_list_contacts(self):
         first_user, first_token = self.create_account()
@@ -394,6 +429,12 @@ class ChatroomTests(unittest.TestCase):
             headers={"X-CSRF-Token": outsider_token},
         )
         self.assertEqual(denied.status_code, 404)
+        denied_rename = outsider_client.patch(
+            f"/api/groups/{group_id}",
+            json={"name": "Unauthorized"},
+            headers={"X-CSRF-Token": outsider_token},
+        )
+        self.assertEqual(denied_rename.status_code, 404)
 
         sent = member_client.post(
             f"/api/groups/{group_id}/messages",
@@ -406,6 +447,81 @@ class ChatroomTests(unittest.TestCase):
         self.assertEqual(message["username"], "Member Fox")
         self.assertEqual(message["animal_username"], member["username"])
         self.assertFalse(message["is_own"])
+
+        denied_edit = self.client.patch(
+            f"/api/groups/{group_id}/messages/{message['id']}",
+            json={"text": "Not the author"},
+            headers={"X-CSRF-Token": creator_token},
+        )
+        self.assertEqual(denied_edit.status_code, 403)
+        edited = member_client.patch(
+            f"/api/groups/{group_id}/messages/{message['id']}",
+            json={"text": "Edited group message"},
+            headers={"X-CSRF-Token": member_token},
+        )
+        self.assertEqual(edited.status_code, 200, edited.json)
+        message = self.client.get(f"/api/groups/{group_id}/messages").json["messages"][0]
+        self.assertEqual(message["text"], "Edited group message")
+        self.assertTrue(message["edited"])
+        polled_edit = self.client.get(
+            f"/api/groups/{group_id}/messages?after={message['id']}&since=2000-01-01T00:00:00.000Z"
+        ).json
+        self.assertEqual(polled_edit["messages"][0]["text"], "Edited group message")
+        self.assertEqual(polled_edit["cursor"], message["id"])
+
+        reply = self.client.post(
+            f"/api/groups/{group_id}/messages",
+            json={"text": "Replying to you", "reply_to_id": message["id"]},
+            headers={"X-CSRF-Token": creator_token},
+        )
+        self.assertEqual(reply.status_code, 201, reply.json)
+        reply_message = self.client.get(f"/api/groups/{group_id}/messages").json["messages"][-1]
+        self.assertEqual(reply_message["reply_to"], {
+            "id": message["id"],
+            "username": "Member Fox",
+            "text": "Edited group message",
+        })
+
+        other_group = self.client.post(
+            "/api/groups",
+            json={"name": "Other plans", "member_ids": [member["id"], third["id"]]},
+            headers={"X-CSRF-Token": creator_token},
+        )
+        cross_group_reply = self.client.post(
+            f"/api/groups/{other_group.json['id']}/messages",
+            json={"text": "Wrong group", "reply_to_id": message["id"]},
+            headers={"X-CSRF-Token": creator_token},
+        )
+        self.assertEqual(cross_group_reply.status_code, 400)
+
+        added = self.client.post(
+            f"/api/groups/{group_id}/members",
+            json={"account_id": outsider["id"]},
+            headers={"X-CSRF-Token": creator_token},
+        )
+        self.assertEqual(added.status_code, 200, added.json)
+        duplicate_add = self.client.post(
+            f"/api/groups/{group_id}/members",
+            json={"account_id": outsider["id"]},
+            headers={"X-CSRF-Token": creator_token},
+        )
+        self.assertEqual(duplicate_add.status_code, 200)
+        renamed_group = member_client.patch(
+            f"/api/groups/{group_id}",
+            json={"name": "Updated plans"},
+            headers={"X-CSRF-Token": member_token},
+        )
+        self.assertEqual(renamed_group.status_code, 200, renamed_group.json)
+        self.assertEqual(outsider_client.get("/api/groups").json["groups"][0]["name"], "Updated plans")
+        removed = member_client.delete(
+            f"/api/groups/{group_id}/members/{third['id']}",
+            headers={"X-CSRF-Token": member_token},
+        )
+        self.assertEqual(removed.status_code, 200, removed.json)
+        self.assertEqual(
+            member_client.get("/api/groups").json["groups"][0]["members"],
+            [creator["username"], "Member Fox", outsider["username"]],
+        )
 
     def test_group_chat_creation_validates_name_and_members(self):
         _user, token = self.create_account()

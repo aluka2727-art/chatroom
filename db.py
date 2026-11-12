@@ -211,11 +211,15 @@ POSTGRES_STATEMENTS = (
         group_id BIGINT NOT NULL REFERENCES group_chats(id) ON DELETE CASCADE,
         author_id BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
         body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500),
+        reply_to_id BIGINT REFERENCES group_messages(id) ON DELETE SET NULL,
+        edited_at TEXT,
         created_at TEXT NOT NULL DEFAULT (
             to_char(timezone('utc', clock_timestamp()), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
         )
     )
     """,
+    "ALTER TABLE group_messages ADD COLUMN IF NOT EXISTS reply_to_id BIGINT REFERENCES group_messages(id) ON DELETE SET NULL",
+    "ALTER TABLE group_messages ADD COLUMN IF NOT EXISTS edited_at TEXT",
     "CREATE INDEX IF NOT EXISTS group_messages_group_idx ON group_messages(group_id, id)",
     """
     CREATE INDEX IF NOT EXISTS direct_messages_sender_idx
@@ -581,19 +585,26 @@ def copy_sqlite_to_postgres(connection, sqlite_path):
                     (row["group_id"], row["account_id"]),
                 )
             if "group_messages" in table_names:
+                available_group_message_columns = {
+                    row["name"] for row in source.execute("PRAGMA table_info(group_messages)")
+                }
+                group_message_columns = [
+                    column for column in ("id", "group_id", "author_id", "body", "created_at")
+                    if column in available_group_message_columns
+                ]
+                group_message_columns.extend(
+                    column for column in ("reply_to_id", "edited_at")
+                    if column in available_group_message_columns
+                )
                 group_messages = source.execute(
-                    """
-                    SELECT id, group_id, author_id, body, created_at
-                    FROM group_messages ORDER BY id
-                    """
+                    f"SELECT {', '.join(group_message_columns)} FROM group_messages ORDER BY id"
                 ).fetchall()
+                columns_sql = ", ".join(group_message_columns)
+                placeholders = ", ".join("?" for _ in group_message_columns)
                 for row in group_messages:
                     connection.execute(
-                        """
-                        INSERT INTO group_messages (id, group_id, author_id, body, created_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (row["id"], row["group_id"], row["author_id"], row["body"], row["created_at"]),
+                        f"INSERT INTO group_messages ({columns_sql}) VALUES ({placeholders})",
+                        tuple(row[column] for column in group_message_columns),
                     )
         if "chat_reads" in table_names:
             for row in source.execute(

@@ -17,9 +17,12 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.12.6";
+const APP_VERSION = "1.12.7";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.12.7": [
+    "Group chats now support replies, editing your own messages, and managing members and group names.",
+  ],
   "1.12.5": [
     "Faster messaging and read receipts, with improved conversation loading.",
     "Messages now show both the date and time.",
@@ -116,6 +119,8 @@ let dmGroupsSnapshot = "";
 let groupSearchPeople = [];
 const selectedGroupMembers = new Map();
 let groupSearchTimer = 0;
+let groupManageSearchTimer = 0;
+let groupManagePeople = [];
 let groupMessagesLoading = false;
 let activeView = "chat";
 let openMessageMenu = null;
@@ -386,6 +391,12 @@ function showLogin() {
   document.querySelector("#groupCreatePanel").hidden = true;
   document.querySelector("#newGroupButton").setAttribute("aria-expanded", "false");
   document.querySelector("#groupMemberResults").replaceChildren();
+  document.querySelector("#groupManagement").hidden = true;
+  document.querySelector("#groupManageToggle").hidden = true;
+  document.querySelector("#groupManageToggle").setAttribute("aria-expanded", "false");
+  document.querySelector("#groupAddMemberResults").replaceChildren();
+  document.querySelector("#groupAddMemberSearch").value = "";
+  groupManagePeople = [];
   resetDmConversationPane();
   pendingDmPartnerId = null;
   pushEndpoint = "";
@@ -1013,7 +1024,7 @@ function clearDmReply() {
 }
 
 function selectDmEdit(message) {
-  if (!message?.is_own || !Number.isInteger(message.id) || !selectedDmUser) return;
+  if (!message?.is_own || !Number.isInteger(message.id) || (!selectedDmUser && !selectedDmGroup)) return;
   clearDmReply();
   editingDmMessage = {
     id: message.id,
@@ -1470,7 +1481,10 @@ async function loadDmGroups() {
     if (selectedDmGroup) {
       selectedDmGroup = groups.find(group => group.id === selectedDmGroup.id) || null;
       if (!selectedDmGroup) resetDmConversationPane();
-      else if (activeView === "dms") showDmConversationPage();
+      else {
+        updateSelectedGroupDetails();
+        if (activeView === "dms") showDmConversationPage();
+      }
     }
     renderDmGroups(groups);
   } catch (error) {
@@ -1502,6 +1516,8 @@ function resetDmConversationPane() {
   dmMessageCursor = 0;
   groupMessageCursor = 0;
   dmPollSince = "";
+  clearTimeout(groupManageSearchTimer);
+  groupManagePeople = [];
   clearDmReply();
   clearDmEdit();
   closeMessageMenu();
@@ -1512,6 +1528,9 @@ function resetDmConversationPane() {
   dmFeed.append(empty);
   document.querySelector("#dmConversationTitle").textContent = "Choose someone to message";
   document.querySelector("#dmConversationSubtitle").textContent = "Search for a username or open an existing conversation.";
+  document.querySelector("#groupManagement").hidden = true;
+  document.querySelector("#groupManageToggle").hidden = true;
+  document.querySelector("#groupManageToggle").setAttribute("aria-expanded", "false");
   dmMessageInput.value = "";
   dmMessageInput.disabled = true;
   dmMessageInput.style.height = "34px";
@@ -1529,6 +1548,8 @@ function selectDmContact(contact) {
   dmMessageCursor = 0;
   groupMessageCursor = 0;
   dmPollSince = "";
+  clearTimeout(groupManageSearchTimer);
+  groupManagePeople = [];
   clearDmReply();
   clearDmEdit();
   closeMessageMenu();
@@ -1542,6 +1563,9 @@ function selectDmContact(contact) {
   syncDmEmojiButtons();
   document.querySelector("#dmConversationTitle").textContent = contact.username;
   document.querySelector("#dmConversationSubtitle").textContent = "Private conversation";
+  document.querySelector("#groupManagement").hidden = true;
+  document.querySelector("#groupManageToggle").hidden = true;
+  document.querySelector("#groupManageToggle").setAttribute("aria-expanded", "false");
   renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
   renderDmGroups(JSON.parse(dmGroupsSnapshot || "[]"));
   showDmConversationPage();
@@ -1556,9 +1580,16 @@ function selectDmGroup(group) {
   dmMessageCursor = 0;
   groupMessageCursor = 0;
   dmPollSince = "";
+  clearTimeout(groupManageSearchTimer);
+  groupManagePeople = [];
   clearDmReply();
   clearDmEdit();
   closeMessageMenu();
+  document.querySelector("#groupManagement").hidden = true;
+  document.querySelector("#groupManageToggle").setAttribute("aria-expanded", "false");
+  document.querySelector("#groupAddMemberSearch").value = "";
+  document.querySelector("#groupAddMemberResults").replaceChildren();
+  showGroupManagementError("");
   dmFeed.replaceChildren();
   dmMessageInput.value = "";
   dmMessageInput.style.height = "34px";
@@ -1567,15 +1598,132 @@ function selectDmGroup(group) {
   dmSendButton.disabled = true;
   syncComposerMode({ isDm: true });
   syncDmEmojiButtons();
-  document.querySelector("#dmConversationTitle").textContent = group.name;
-  document.querySelector("#dmConversationSubtitle").textContent =
-    `${group.members.length} members: ${group.members.join(", ")}`;
+  document.querySelector("#groupManageToggle").hidden = false;
+  updateSelectedGroupDetails();
   renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
   renderDmGroups(JSON.parse(dmGroupsSnapshot || "[]"));
   showDmConversationPage();
   showDmError("");
   dmMessageError.hidden = true;
   loadGroupMessages();
+}
+
+function updateSelectedGroupDetails() {
+  if (!selectedDmGroup) return;
+  document.querySelector("#dmConversationTitle").textContent = selectedDmGroup.name;
+  document.querySelector("#dmConversationSubtitle").textContent =
+    `${selectedDmGroup.members.length} members: ${selectedDmGroup.members.join(", ")}`;
+  const renameInput = document.querySelector("#groupRenameInput");
+  if (document.activeElement !== renameInput) renameInput.value = selectedDmGroup.name;
+
+  const memberList = document.querySelector("#groupCurrentMembers");
+  memberList.replaceChildren();
+  for (const member of selectedDmGroup.member_accounts || []) {
+    const row = document.createElement("div");
+    row.className = "group-member-row";
+    const name = document.createElement("span");
+    name.textContent = member.name;
+    const remove = document.createElement("button");
+    remove.className = "group-member-remove";
+    remove.type = "button";
+    remove.textContent = member.id === currentUser?.id ? "Leave" : "Remove";
+    remove.setAttribute("aria-label", `${member.id === currentUser?.id ? "Leave" : "Remove"} ${member.name}`);
+    remove.addEventListener("click", async () => {
+      if (member.id !== currentUser?.id && !window.confirm(`Remove ${member.name} from ${selectedDmGroup.name}?`)) return;
+      remove.disabled = true;
+      try {
+        await api(`/api/groups/${selectedDmGroup.id}/members/${member.id}`, { method: "DELETE" });
+        dmGroupsSnapshot = "";
+        await loadDmGroups();
+      } catch (error) {
+        if (error.accountDeleted) {
+          showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+        } else if (error.status === 401) {
+          showLogin();
+        } else {
+          showGroupManagementError(error.message);
+        }
+        remove.disabled = false;
+      }
+    });
+    row.append(name, remove);
+    memberList.append(row);
+  }
+}
+
+function showGroupManagementError(message) {
+  const error = document.querySelector("#groupManagementError");
+  error.textContent = message || "";
+  error.hidden = !message;
+}
+
+function renderGroupManagementResults(people) {
+  const results = document.querySelector("#groupAddMemberResults");
+  results.replaceChildren();
+  if (!people.length) {
+    if (document.querySelector("#groupAddMemberSearch").value.trim()) {
+      const empty = document.createElement("p");
+      empty.className = "dm-search-empty";
+      empty.textContent = "No one matched that search.";
+      results.append(empty);
+    }
+    return;
+  }
+  const groupId = selectedDmGroup?.id;
+  const memberIds = new Set((selectedDmGroup?.member_accounts || []).map(member => member.id));
+  for (const person of people.filter(person => !memberIds.has(person.id))) {
+    results.append(createDmPersonButton(person, {
+      preview: "Tap to add",
+      onClick: async () => {
+        if (!selectedDmGroup || selectedDmGroup.id !== groupId) return;
+        try {
+          await api(`/api/groups/${groupId}/members`, {
+            method: "POST",
+            body: JSON.stringify({ account_id: person.id }),
+          });
+          document.querySelector("#groupAddMemberSearch").value = "";
+          document.querySelector("#groupAddMemberResults").replaceChildren();
+          groupManagePeople = [];
+          showGroupManagementError("");
+          dmGroupsSnapshot = "";
+          await loadDmGroups();
+        } catch (error) {
+          if (error.accountDeleted) {
+            showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+          } else if (error.status === 401) {
+            showLogin();
+          } else {
+            showGroupManagementError(error.message);
+          }
+        }
+      },
+    }));
+  }
+}
+
+async function searchGroupManageMembers(query) {
+  const trimmed = query.trim();
+  if (!trimmed || !selectedDmGroup) {
+    groupManagePeople = [];
+    renderGroupManagementResults([]);
+    return;
+  }
+  const groupId = selectedDmGroup.id;
+  try {
+    const data = await api(`/api/dms/search?q=${encodeURIComponent(trimmed)}`);
+    if (selectedDmGroup?.id !== groupId) return;
+    groupManagePeople = data.results || [];
+    renderGroupManagementResults(groupManagePeople);
+    showGroupManagementError("");
+  } catch (error) {
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      showGroupManagementError(error.message);
+    }
+  }
 }
 
 function addDmMessage(message) {
@@ -1611,11 +1759,10 @@ function addDmMessage(message) {
     edited.textContent = "edited";
     meta.append(edited);
   }
-  if (!selectedDmGroup && !message.pending && !message.send_error && message.reply_to !== undefined && message.username) {
-    const canEdit = Boolean(message.is_own) && Number.isInteger(message.id);
+  if (!message.pending && !message.send_error && message.reply_to !== undefined && message.username) {
     meta.append(createMessageActions(message, {
       trigger: article,
-      canEdit,
+      canEdit: Boolean(message.is_own) && Number.isInteger(message.id),
       onReply: selectDmReply,
       onEdit: selectDmEdit,
     }));
@@ -1698,7 +1845,10 @@ async function loadGroupMessages() {
   const groupId = selectedDmGroup.id;
   groupMessagesLoading = true;
   try {
-    const data = await api(`/api/groups/${groupId}/messages?after=${groupMessageCursor}`);
+    const sinceQuery = groupMessageCursor && dmPollSince
+      ? `&since=${encodeURIComponent(dmPollSince)}`
+      : "";
+    const data = await api(`/api/groups/${groupId}/messages?after=${groupMessageCursor}${sinceQuery}`);
     if (selectedDmGroup?.id !== groupId) return;
     const messages = data.messages || [];
     if (groupMessageCursor === 0 && !messages.length && !dmFeed.querySelector(".message")) {
@@ -1712,10 +1862,15 @@ async function loadGroupMessages() {
       addDmMessage(message);
     }
     const initialLoad = groupMessageCursor === 0;
+    const previousCursor = groupMessageCursor;
     groupMessageCursor = Math.max(groupMessageCursor, data.cursor || 0);
+    if (data.server_time) dmPollSince = data.server_time;
     if (messages.length) {
       const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth", dmFeed);
+      const onlyEdits = !initialLoad && messages.every(message => message.id <= previousCursor);
+      if (!onlyEdits) {
+        scrollToLatestMessage(initialLoad || reducedMotion ? "auto" : "smooth", dmFeed);
+      }
     }
     showDmError("");
   } catch (error) {
@@ -2249,6 +2404,43 @@ document.querySelector("#newGroupButton").addEventListener("click", event => {
   document.querySelector("#groupCreateError").hidden = true;
   if (!panel.hidden) document.querySelector("#groupNameInput").focus();
 });
+document.querySelector("#groupManageToggle").addEventListener("click", event => {
+  const panel = document.querySelector("#groupManagement");
+  panel.hidden = !panel.hidden;
+  event.currentTarget.setAttribute("aria-expanded", String(!panel.hidden));
+  showGroupManagementError("");
+});
+document.querySelector("#groupRenameForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  if (!selectedDmGroup) return;
+  const name = document.querySelector("#groupRenameInput").value.trim();
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  button.disabled = true;
+  showGroupManagementError("");
+  try {
+    await api(`/api/groups/${selectedDmGroup.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+    dmGroupsSnapshot = "";
+    await loadDmGroups();
+  } catch (error) {
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      showGroupManagementError(error.message);
+    }
+  } finally {
+    button.disabled = false;
+  }
+});
+document.querySelector("#groupAddMemberSearch").addEventListener("input", event => {
+  clearTimeout(groupManageSearchTimer);
+  const query = event.target.value;
+  groupManageSearchTimer = window.setTimeout(() => searchGroupManageMembers(query), 200);
+});
 document.querySelector("#groupNameInput").addEventListener("input", updateGroupCreateButton);
 document.querySelector("#groupMemberSearch").addEventListener("input", event => {
   clearTimeout(groupSearchTimer);
@@ -2270,9 +2462,14 @@ document.querySelector("#groupCreatePanel").addEventListener("submit", async eve
         member_ids: [...selectedGroupMembers.keys()],
       }),
     });
+    const selectedMembers = [...selectedGroupMembers.values()];
     const members = [
       publicNameFor(currentUser),
-      ...[...selectedGroupMembers.values()].map(person => person.username),
+      ...selectedMembers.map(person => person.username),
+    ];
+    const memberAccounts = [
+      { id: currentUser.id, name: publicNameFor(currentUser) },
+      ...selectedMembers.map(person => ({ id: person.id, name: person.username })),
     ];
     document.querySelector("#groupCreatePanel").reset();
     selectedGroupMembers.clear();
@@ -2284,6 +2481,7 @@ document.querySelector("#groupCreatePanel").addEventListener("submit", async eve
       id: result.id,
       name: result.name,
       members,
+      member_accounts: memberAccounts,
       last_message: null,
       last_message_at: null,
     };
@@ -2664,6 +2862,62 @@ document.querySelector("#dmMessageForm").addEventListener("submit", async event 
 
   if (selectedDmGroup) {
     const groupId = selectedDmGroup.id;
+    if (editingDmMessage) {
+      const editSnapshot = editingDmMessage;
+      if (text === editSnapshot.text) {
+        dmMessageInput.value = "";
+        dmMessageInput.style.height = "34px";
+        clearDmEdit();
+        dmSendButton.disabled = true;
+        return;
+      }
+      const previous = { ...editSnapshot };
+      dmMessageInput.value = "";
+      dmMessageInput.style.height = "34px";
+      clearDmEdit();
+      dmMessageError.hidden = true;
+      dmSendButton.disabled = true;
+      addDmMessage({
+        ...editSnapshot,
+        username: publicNameFor(currentUser),
+        animal_username: currentUser.username,
+        display_name: currentUser.display_name || null,
+        avatar_url: currentUser.avatar_url || null,
+        text,
+        is_own: true,
+        edited: true,
+      });
+      try {
+        await api(`/api/groups/${groupId}/messages/${editSnapshot.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ text }),
+        });
+        if (selectedDmGroup?.id === groupId) loadGroupMessages();
+        dmGroupsSnapshot = "";
+        loadDmGroups();
+      } catch (error) {
+        if (selectedDmGroup?.id === groupId) {
+          addDmMessage({
+            ...previous,
+            username: publicNameFor(currentUser),
+            animal_username: currentUser.username,
+            display_name: currentUser.display_name || null,
+            avatar_url: currentUser.avatar_url || null,
+            is_own: true,
+            send_error: sendFailureLabel(error),
+          });
+        }
+        if (error.accountDeleted) {
+          showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+        } else if (error.status === 401) {
+          showLogin();
+        }
+      } finally {
+        dmSendButton.disabled = (!selectedDmUser && !selectedDmGroup) || !dmMessageInput.value.trim();
+      }
+      return;
+    }
+    const replySnapshot = replyingToDm;
     const pendingId = nextPendingMessageId();
     const optimistic = {
       id: pendingId,
@@ -2674,10 +2928,14 @@ document.querySelector("#dmMessageForm").addEventListener("submit", async event 
       text,
       created_at: new Date().toISOString(),
       is_own: true,
+      reply_to: replySnapshot
+        ? { id: replySnapshot.id, username: replySnapshot.username, text: replySnapshot.text }
+        : null,
       pending: true,
     };
     dmMessageInput.value = "";
     dmMessageInput.style.height = "34px";
+    clearDmReply();
     dmMessageError.hidden = true;
     dmSendButton.disabled = true;
     dmFeed.querySelector(".empty-state")?.remove();
@@ -2686,7 +2944,10 @@ document.querySelector("#dmMessageForm").addEventListener("submit", async event 
     try {
       const result = await api(`/api/groups/${groupId}/messages`, {
         method: "POST",
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({
+          text,
+          ...(replySnapshot ? { reply_to_id: replySnapshot.id } : {}),
+        }),
       });
       if (selectedDmGroup?.id === groupId) {
         promotePendingMessage(dmFeed, pendingId, result.id);
