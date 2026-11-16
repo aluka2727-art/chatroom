@@ -228,6 +228,11 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .room-heading h1 { overflow: hidden; font-size: 18px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .room-heading-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .room-title-block { min-width: 0; flex: 1; }
+.chat-dnd-toggle { flex: 0 0 auto; padding: 6px 9px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--faint); cursor: pointer; font-size: 10px; font-weight: 700; }
+.chat-dnd-toggle:hover { border-color: var(--green); color: var(--green); }
+.chat-dnd-toggle[aria-pressed="true"] { border-color: var(--danger); color: var(--danger); }
+.chat-dnd-toggle:disabled { cursor: wait; opacity: .6; }
+.chat-dnd-toggle[hidden] { display: none; }
 .menu-button, .menu-backdrop { display: none; }
 .account-controls { display: flex; align-items: center; gap: 12px; }
 .animal-name { color: var(--label); font-size: 11px; font-weight: 700; }
@@ -380,6 +385,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .dm-conversation-copy { min-width: 0; }
 .dm-conversation-heading h3 { margin: 0; font: 600 14px "Space Grotesk", sans-serif; }
 .dm-conversation-heading p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+.conversation-dnd-toggle { margin-left: auto; }
 .dm-feed { padding: 8px 0; }
 .dm-panel .composer-wrap { padding-bottom: 0; }
 .feed {

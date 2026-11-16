@@ -242,6 +242,14 @@ POSTGRES_STATEMENTS = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS muted_chats (
+        account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        chat_type TEXT NOT NULL CHECK (chat_type IN ('world', 'dm', 'group')),
+        chat_id BIGINT NOT NULL DEFAULT 0,
+        PRIMARY KEY (account_id, chat_type, chat_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS chat_reads (
         account_id BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         last_read_message_id BIGINT NOT NULL DEFAULT 0

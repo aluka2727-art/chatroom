@@ -34,7 +34,7 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.12.7", page.data)
+        self.assertIn(b"v1.12.8", page.data)
         self.assertIn(b"id=\"versionNotesScreen\"", page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
@@ -51,8 +51,10 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"id=\"groupManageToggle\"", page.data)
         self.assertIn(b"id=\"dmGroupContacts\"", page.data)
         self.assertIn(b"id=\"pushToggle\"", page.data)
+        self.assertIn(b"id=\"worldDndToggle\"", page.data)
+        self.assertIn(b"id=\"conversationDndToggle\"", page.data)
         self.assertIn(b"id=\"themeToggle\"", page.data)
-        self.assertIn(b'APP_VERSION = "1.12.7"', script.data)
+        self.assertIn(b'APP_VERSION = "1.12.8"', script.data)
         self.assertIn(b"Couldn't send, inappropriate language", script.data)
         self.assertIn(b"promotePendingMessage", script.data)
         self.assertIn(b"createMessageActions", script.data)
@@ -555,6 +557,8 @@ class ChatroomTests(unittest.TestCase):
         self.assertIsNone(moderate_message("this is shit", ""))
         self.assertIsNone(moderate_message("damn that was close", ""))
         self.assertIsNone(moderate_message("hello everyone", ""))
+        self.assertIsNone(moderate_message("I had a beer and hugged my friend", ""))
+        self.assertIsNone(moderate_message("They kissed in the movie", ""))
         self.assertEqual(moderate_message("fucktard", ""), MODERATION_REJECT_MESSAGE)
         self.assertEqual(moderate_message("f*cktard", ""), MODERATION_REJECT_MESSAGE)
         self.assertEqual(moderate_message("you slut", ""), MODERATION_REJECT_MESSAGE)
@@ -573,6 +577,24 @@ class ChatroomTests(unittest.TestCase):
         )
         self.assertEqual(blocked.status_code, 400)
         self.assertEqual(blocked.json["error"], MODERATION_REJECT_MESSAGE)
+
+    def test_openai_moderation_only_blocks_abuse_and_hate_categories(self):
+        from app import openai_moderation_blocks
+
+        self.assertFalse(openai_moderation_blocks({
+            "flagged": True,
+            "categories": {"sexual": True, "illicit": True, "violence": True},
+            "category_scores": {"sexual": 0.99, "illicit": 0.99, "violence": 0.99},
+        }))
+        self.assertTrue(openai_moderation_blocks({
+            "flagged": True,
+            "categories": {"harassment": True},
+        }))
+        self.assertTrue(openai_moderation_blocks({
+            "flagged": False,
+            "categories": {},
+            "category_scores": {"hate": 0.5},
+        }))
 
     def test_messages_reject_slur_evasions_without_api_key(self):
         from app import moderate_message
@@ -1186,6 +1208,92 @@ class ChatroomTests(unittest.TestCase):
         self.assertEqual(removed.status_code, 200)
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM push_subscriptions").fetchone()[0], 0)
         connection.close()
+
+    def test_group_notifications_and_per_chat_mutes(self):
+        recipient, recipient_token = self.create_account()
+        sender_client = self.app.test_client()
+        sender, sender_token = self.create_account(sender_client)
+        third_client = self.app.test_client()
+        third, _third_token = self.create_account(third_client)
+        self.enable_push(self.client, "https://push.example.test/recipient")
+
+        created = self.client.post(
+            "/api/groups",
+            json={"name": "Weekend plans", "member_ids": [sender["id"], third["id"]]},
+            headers={"X-CSRF-Token": recipient_token},
+        )
+        self.assertEqual(created.status_code, 201, created.json)
+        group_id = created.json["id"]
+
+        with patch("app.webpush") as webpush:
+            sent = sender_client.post(
+                f"/api/groups/{group_id}/messages",
+                json={"text": "Meet at noon"},
+                headers={"X-CSRF-Token": sender_token},
+            )
+            self.assertEqual(sent.status_code, 201, sent.json)
+            webpush.assert_called_once()
+            payload = json.loads(webpush.call_args.kwargs["data"])
+            self.assertEqual(payload["title"], "Weekend plans")
+            self.assertEqual(payload["url"], f"/?view=dms&group={group_id}")
+            self.assertEqual(payload["tag"], f"pigin-group-{group_id}")
+
+        preference_url = "/api/notification-preferences"
+        muted = self.client.put(
+            preference_url,
+            json={"chat_type": "group", "chat_id": group_id, "muted": True},
+            headers={"X-CSRF-Token": recipient_token},
+        )
+        self.assertEqual(muted.status_code, 200, muted.json)
+        self.assertTrue(muted.json["muted"])
+        self.assertEqual(
+            self.client.get(preference_url).json["muted"],
+            [{"chat_type": "group", "chat_id": group_id}],
+        )
+        self.assertEqual(third_client.get(preference_url).json["muted"], [])
+
+        with patch("app.webpush") as webpush:
+            sent = sender_client.post(
+                f"/api/groups/{group_id}/messages",
+                json={"text": "Muted message"},
+                headers={"X-CSRF-Token": sender_token},
+            )
+            self.assertEqual(sent.status_code, 201, sent.json)
+            webpush.assert_not_called()
+
+        invalid_group = self.client.put(
+            preference_url,
+            json={"chat_type": "group", "chat_id": group_id + 100, "muted": True},
+            headers={"X-CSRF-Token": recipient_token},
+        )
+        self.assertEqual(invalid_group.status_code, 404)
+        invalid_world = self.client.put(
+            preference_url,
+            json={"chat_type": "world", "chat_id": group_id, "muted": True},
+            headers={"X-CSRF-Token": recipient_token},
+        )
+        self.assertEqual(invalid_world.status_code, 400)
+
+        for chat_type, chat_id, post in (
+            ("dm", sender["id"], lambda: sender_client.post(
+                f"/api/dms/{recipient['id']}", json={"text": "Muted DM"},
+                headers={"X-CSRF-Token": sender_token},
+            )),
+            ("world", 0, lambda: sender_client.post(
+                "/api/messages", json={"text": "Muted world message"},
+                headers={"X-CSRF-Token": sender_token},
+            )),
+        ):
+            updated = self.client.put(
+                preference_url,
+                json={"chat_type": chat_type, "chat_id": chat_id, "muted": True},
+                headers={"X-CSRF-Token": recipient_token},
+            )
+            self.assertEqual(updated.status_code, 200, updated.json)
+            with patch("app.webpush") as webpush:
+                delivered = post()
+                self.assertEqual(delivered.status_code, 201, delivered.json)
+                webpush.assert_not_called()
 
     def test_expired_push_subscription_is_removed(self):
         recipient, _recipient_token = self.create_account()

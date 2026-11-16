@@ -17,9 +17,14 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.12.7";
+const APP_VERSION = "1.12.8";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.12.8": [
+    "Get push notifications for private group chats.",
+    "Mute notifications separately for World Chat, a DM, or a group chat.",
+    "Moderation is more lenient about ordinary topics, while continuing to block hateful or abusive messages.",
+  ],
   "1.12.7": [
     "Group chats now support replies, editing your own messages, and managing members and group names.",
   ],
@@ -97,6 +102,8 @@ const dmReplyPreviewLabel = document.querySelector("#dmReplyPreviewLabel");
 const dmReplyPreviewText = document.querySelector("#dmReplyPreviewText");
 const pushToggle = document.querySelector("#pushToggle");
 const pushHintText = document.querySelector("#pushHintText");
+const worldDndToggle = document.querySelector("#worldDndToggle");
+const conversationDndToggle = document.querySelector("#conversationDndToggle");
 const themeToggle = document.querySelector("#themeToggle");
 let currentUser = null;
 let csrfToken = "";
@@ -142,8 +149,11 @@ const REALTIME_SAFETY_SYNC_MS = 60000;
 const PRESENCE_MIN_INTERVAL_MS = 8000;
 let warningKind = null;
 let pendingDmPartnerId = null;
+let pendingDmGroupId = null;
 let pushHint = "";
 let pushEndpoint = "";
+let mutedChatKeys = new Set();
+let notificationPreferencesReady = false;
 let enablingPush = false;
 let presenceClientMemory = "";
 let readSyncEpoch = 0;
@@ -188,6 +198,82 @@ function updateDmUnreadDots() {
     const name = button.querySelector(".dm-contact-name")?.textContent || "Conversation";
     if (count > 0) button.setAttribute("aria-label", `${name}, ${count} unread`);
     else button.removeAttribute("aria-label");
+  }
+}
+
+function notificationPreferenceKey(chatType, chatId) {
+  return `${chatType}:${chatId}`;
+}
+
+function syncDndButton(button, chatType, chatId, chatName) {
+  const muted = mutedChatKeys.has(notificationPreferenceKey(chatType, chatId));
+  const label = `${muted ? "Unmute" : "Mute"} notifications for ${chatName}`;
+  button.disabled = !notificationPreferencesReady;
+  button.textContent = muted ? "Muted" : "Mute";
+  button.setAttribute("aria-pressed", String(muted));
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+
+function syncDndControls() {
+  syncDndButton(worldDndToggle, "world", 0, "World Chat");
+  if (selectedDmGroup) {
+    conversationDndToggle.hidden = false;
+    syncDndButton(conversationDndToggle, "group", selectedDmGroup.id, selectedDmGroup.name);
+  } else if (selectedDmUser) {
+    conversationDndToggle.hidden = false;
+    syncDndButton(conversationDndToggle, "dm", selectedDmUser.id, selectedDmUser.username);
+  } else {
+    conversationDndToggle.hidden = true;
+    conversationDndToggle.disabled = true;
+  }
+}
+
+function showDndError(error) {
+  if (error.status === 401) {
+    showLogin();
+  } else if (activeView === "dms") {
+    showDmError(error.message || "Could not update notification preferences.");
+  } else {
+    messageError.textContent = error.message || "Could not update notification preferences.";
+    messageError.hidden = false;
+  }
+}
+
+async function loadNotificationPreferences() {
+  notificationPreferencesReady = false;
+  syncDndControls();
+  try {
+    const data = await api("/api/notification-preferences");
+    mutedChatKeys = new Set((data.muted || []).map(
+      preference => notificationPreferenceKey(preference.chat_type, preference.chat_id),
+    ));
+    notificationPreferencesReady = true;
+    syncDndControls();
+  } catch (error) {
+    showDndError(error);
+  }
+}
+
+async function toggleChatNotifications(chatType, chatId) {
+  if (!notificationPreferencesReady) return;
+  const button = chatType === "world" ? worldDndToggle : conversationDndToggle;
+  const key = notificationPreferenceKey(chatType, chatId);
+  const muted = !mutedChatKeys.has(key);
+  button.disabled = true;
+  try {
+    const result = await api("/api/notification-preferences", {
+      method: "PUT",
+      body: JSON.stringify({ chat_type: chatType, chat_id: chatId, muted }),
+    });
+    if (result.muted) mutedChatKeys.add(key);
+    else mutedChatKeys.delete(key);
+    syncDndControls();
+    showDmError("");
+    messageError.hidden = true;
+  } catch (error) {
+    showDndError(error);
+    syncDndControls();
   }
 }
 
@@ -371,6 +457,8 @@ function showLogin() {
   realtimeSetupFor = null;
   realtimeReadyTopics = new Set();
   currentUser = null;
+  mutedChatKeys = new Set();
+  notificationPreferencesReady = false;
   messageCursor = 0;
   warningKind = null;
   clearReply();
@@ -399,8 +487,10 @@ function showLogin() {
   groupManagePeople = [];
   resetDmConversationPane();
   pendingDmPartnerId = null;
+  pendingDmGroupId = null;
   pushEndpoint = "";
   resetPushToggle();
+  syncDndControls();
   setMenuOpen(false);
   applyUnread({ group: 0, dms: 0, total: 0, conversations: {} });
   activeView = "chat";
@@ -593,8 +683,10 @@ function showRoom(user) {
   }
   if (isAdmin) loadAdminData();
   pendingDmPartnerId = readDmDeepLink();
+  pendingDmGroupId = readGroupDeepLink();
   refreshPushToggle();
-  if (pendingDmPartnerId) setRoomView("dms");
+  loadNotificationPreferences();
+  if (pendingDmPartnerId || pendingDmGroupId) setRoomView("dms");
   applyRememberedShare();
 }
 
@@ -1476,8 +1568,18 @@ async function loadDmGroups() {
     const data = await api("/api/groups");
     const groups = data.groups || [];
     const snapshot = JSON.stringify(groups);
-    if (snapshot === dmGroupsSnapshot) return;
+    const pendingId = pendingDmGroupId;
+    if (snapshot === dmGroupsSnapshot && !pendingId) return;
     dmGroupsSnapshot = snapshot;
+    if (pendingId) {
+      pendingDmGroupId = null;
+      clearDmDeepLink();
+      const group = groups.find(item => item.id === pendingId);
+      if (group) {
+        selectDmGroup(group);
+        return;
+      }
+    }
     if (selectedDmGroup) {
       selectedDmGroup = groups.find(group => group.id === selectedDmGroup.id) || null;
       if (!selectedDmGroup) resetDmConversationPane();
@@ -1531,6 +1633,7 @@ function resetDmConversationPane() {
   document.querySelector("#groupManagement").hidden = true;
   document.querySelector("#groupManageToggle").hidden = true;
   document.querySelector("#groupManageToggle").setAttribute("aria-expanded", "false");
+  conversationDndToggle.hidden = true;
   dmMessageInput.value = "";
   dmMessageInput.disabled = true;
   dmMessageInput.style.height = "34px";
@@ -1540,6 +1643,7 @@ function resetDmConversationPane() {
   syncDmEmojiButtons();
   clearDmSearchResults();
   showDmContactsPage();
+  syncDndControls();
 }
 
 function selectDmContact(contact) {
@@ -1568,6 +1672,7 @@ function selectDmContact(contact) {
   document.querySelector("#groupManageToggle").setAttribute("aria-expanded", "false");
   renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
   renderDmGroups(JSON.parse(dmGroupsSnapshot || "[]"));
+  syncDndControls();
   showDmConversationPage();
   showDmError("");
   dmMessageError.hidden = true;
@@ -1602,6 +1707,7 @@ function selectDmGroup(group) {
   updateSelectedGroupDetails();
   renderDmContacts(JSON.parse(dmContactsSnapshot || "[]"));
   renderDmGroups(JSON.parse(dmGroupsSnapshot || "[]"));
+  syncDndControls();
   showDmConversationPage();
   showDmError("");
   dmMessageError.hidden = true;
@@ -1649,6 +1755,7 @@ function updateSelectedGroupDetails() {
     row.append(name, remove);
     memberList.append(row);
   }
+  syncDndControls();
 }
 
 function showGroupManagementError(message) {
@@ -1993,6 +2100,13 @@ function readDmDeepLink() {
   return Number.isInteger(partnerId) && partnerId > 0 ? partnerId : null;
 }
 
+function readGroupDeepLink() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("view") !== "dms") return null;
+  const groupId = Number(params.get("group"));
+  return Number.isInteger(groupId) && groupId > 0 ? groupId : null;
+}
+
 function firstSharedUrl(value) {
   const match = String(value || "").match(/https?:\/\/[^\s]+/i);
   return match ? match[0].replace(/[),.;:!?]+$/, "") : "";
@@ -2045,6 +2159,7 @@ function clearDmDeepLink() {
   if (!url.searchParams.has("view") && !url.searchParams.has("with")) return;
   url.searchParams.delete("view");
   url.searchParams.delete("with");
+  url.searchParams.delete("group");
   window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
@@ -2644,6 +2759,11 @@ deleteUserForm.addEventListener("submit", async event => {
   }
 });
 pushToggle.addEventListener("click", togglePushNotifications);
+worldDndToggle.addEventListener("click", () => toggleChatNotifications("world", 0));
+conversationDndToggle.addEventListener("click", () => {
+  if (selectedDmGroup) toggleChatNotifications("group", selectedDmGroup.id);
+  else if (selectedDmUser) toggleChatNotifications("dm", selectedDmUser.id);
+});
 themeToggle.addEventListener("click", () => {
   applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 });
@@ -2656,6 +2776,13 @@ function openNotificationTarget(url) {
     return;
   }
   if (view !== "dms") return;
+  const groupId = Number(target.searchParams.get("group"));
+  if (Number.isInteger(groupId) && groupId > 0) {
+    pendingDmGroupId = groupId;
+    pendingDmPartnerId = null;
+    setRoomView("dms");
+    return;
+  }
   const partnerId = Number(target.searchParams.get("with"));
   if (!Number.isInteger(partnerId) || partnerId < 1) {
     setRoomView("dms");

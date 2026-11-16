@@ -90,23 +90,16 @@ def detect_avatar_extension(payload, content_type="", filename=""):
 OPENAI_MODERATION_URL = "https://api.openai.com/v1/moderations"
 OPENAI_MODERATION_MODEL = "omni-moderation-latest"
 MODERATION_REJECT_MESSAGE = "Message not allowed."
-# Free omni-moderation categories from the OpenAI Moderation guide.
+# Only hate and harassment categories are blocked by broad topic moderation;
+# benign discussion of other topics should remain allowed.
 BLOCKED_MODERATION_CATEGORIES = (
     "hate",
     "hate/threatening",
     "harassment",
     "harassment/threatening",
-    "illicit",
-    "illicit/violent",
-    "self-harm",
-    "self-harm/intent",
-    "self-harm/instructions",
-    "sexual",
-    "sexual/minors",
-    "violence",
-    "violence/graphic",
 )
-# Block when OpenAI is fairly confident even if `flagged` stayed false.
+# Ignore the API's aggregate `flagged` value because it also covers categories
+# outside this chatroom's abuse-focused policy.
 MODERATION_SCORE_THRESHOLD = 0.5
 # Casual swearing (fuck/shit/damn) is allowed. Local blocks target sexual insults,
 # group slurs, ableist language, and clearly disrespectful personal attacks.
@@ -179,8 +172,6 @@ def contains_blocked_language(text):
 def openai_moderation_blocks(result):
     """Apply chatroom policy to one free Moderations API result."""
     if not isinstance(result, dict):
-        return True
-    if result.get("flagged"):
         return True
     categories = result.get("categories")
     if isinstance(categories, dict) and any(
@@ -553,6 +544,12 @@ def create_app(test_config=None):
                 p256dh TEXT NOT NULL,
                 auth TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            );
+            CREATE TABLE IF NOT EXISTS muted_chats (
+                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                chat_type TEXT NOT NULL CHECK (chat_type IN ('world', 'dm', 'group')),
+                chat_id INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (account_id, chat_type, chat_id)
             );
             CREATE TABLE IF NOT EXISTS chat_reads (
                 account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
@@ -985,6 +982,14 @@ def create_app(test_config=None):
             )
             database.commit()
             unread = unread_payload(database, account_id)
+            if database.execute(
+                """
+                SELECT 1 FROM muted_chats
+                WHERE account_id = ? AND chat_type = 'world' AND chat_id = 0
+                """,
+                (account_id,),
+            ).fetchone():
+                continue
             deliver_push(
                 database,
                 account_id,
@@ -1003,6 +1008,14 @@ def create_app(test_config=None):
             database.commit()
 
     def send_dm_push(database, recipient_id, sender_id, sender_username):
+        if database.execute(
+            """
+            SELECT 1 FROM muted_chats
+            WHERE account_id = ? AND chat_type = 'dm' AND chat_id = ?
+            """,
+            (recipient_id, sender_id),
+        ).fetchone():
+            return
         deliver_push(
             database,
             recipient_id,
@@ -1014,6 +1027,43 @@ def create_app(test_config=None):
                 "badgeCount": unread_payload(database, recipient_id)["total"],
             },
         )
+
+    def send_group_push(database, group_id, author_id):
+        group = database.execute(
+            "SELECT name FROM group_chats WHERE id = ?",
+            (group_id,),
+        ).fetchone()
+        if group is None:
+            return
+        recipients = database.execute(
+            """
+            SELECT DISTINCT gm.account_id
+            FROM group_members AS gm
+            JOIN push_subscriptions AS ps ON ps.account_id = gm.account_id
+            WHERE gm.group_id = ? AND gm.account_id != ?
+            """,
+            (group_id, author_id),
+        ).fetchall()
+        for recipient in recipients:
+            account_id = recipient["account_id"]
+            if database.execute(
+                """
+                SELECT 1 FROM muted_chats
+                WHERE account_id = ? AND chat_type = 'group' AND chat_id = ?
+                """,
+                (account_id, group_id),
+            ).fetchone():
+                continue
+            deliver_push(
+                database,
+                account_id,
+                {
+                    "title": group["name"],
+                    "body": "New message in your group chat.",
+                    "url": f"/?view=dms&group={group_id}",
+                    "tag": f"pigin-group-{group_id}",
+                },
+            )
 
 
 
@@ -2153,6 +2203,7 @@ def create_app(test_config=None):
         )
         message_id = inserted_id(cursor)
         database.commit()
+        send_group_push(database, group_id, g.account["id"])
         return jsonify(id=message_id), 201
 
     @app.patch("/api/groups/<int:group_id>/messages/<int:message_id>")
@@ -2295,6 +2346,76 @@ def create_app(test_config=None):
             enabled=push_is_configured(),
             public_key=app.config["VAPID_PUBLIC_KEY"] if push_is_configured() else None,
         )
+
+    @app.get("/api/notification-preferences")
+    @login_required
+    def api_notification_preferences():
+        rows = get_db().execute(
+            """
+            SELECT chat_type, chat_id
+            FROM muted_chats
+            WHERE account_id = ?
+            ORDER BY chat_type, chat_id
+            """,
+            (g.account["id"],),
+        ).fetchall()
+        return jsonify(muted=[
+            {"chat_type": row["chat_type"], "chat_id": row["chat_id"]}
+            for row in rows
+        ])
+
+    @app.put("/api/notification-preferences")
+    @login_required
+    def api_update_notification_preference():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify(error="Notification preferences are required."), 400
+        chat_type = data.get("chat_type")
+        chat_id = data.get("chat_id")
+        muted = data.get("muted")
+        if (
+            not isinstance(chat_type, str)
+            or chat_type not in {"world", "dm", "group"}
+            or type(chat_id) is not int
+            or chat_id > 2**63 - 1
+            or type(muted) is not bool
+            or (chat_type == "world" and chat_id != 0)
+            or (chat_type != "world" and chat_id < 1)
+        ):
+            return jsonify(error="Invalid notification preference."), 400
+
+        database = get_db()
+        if chat_type == "dm":
+            if chat_id == g.account["id"]:
+                return jsonify(error="Invalid conversation."), 400
+            if database.execute("SELECT 1 FROM accounts WHERE id = ?", (chat_id,)).fetchone() is None:
+                return jsonify(error="Account not found."), 404
+        elif chat_type == "group":
+            if database.execute(
+                "SELECT 1 FROM group_members WHERE group_id = ? AND account_id = ?",
+                (chat_id, g.account["id"]),
+            ).fetchone() is None:
+                return jsonify(error="Group chat not found."), 404
+
+        if muted:
+            database.execute(
+                """
+                INSERT INTO muted_chats (account_id, chat_type, chat_id)
+                VALUES (?, ?, ?)
+                ON CONFLICT(account_id, chat_type, chat_id) DO NOTHING
+                """,
+                (g.account["id"], chat_type, chat_id),
+            )
+        else:
+            database.execute(
+                """
+                DELETE FROM muted_chats
+                WHERE account_id = ? AND chat_type = ? AND chat_id = ?
+                """,
+                (g.account["id"], chat_type, chat_id),
+            )
+        database.commit()
+        return jsonify(chat_type=chat_type, chat_id=chat_id, muted=muted)
 
     @app.post("/api/push/subscriptions")
     @login_required
