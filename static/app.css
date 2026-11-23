@@ -721,3 +721,38 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .delete-user-dialog p { font-size: 13px; line-height: 1.5; }
 .delete-user-dialog .auth-input { width: 100%; box-sizing: border-box; margin-top: 10px; }
 .delete-user-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+
+.mobile-keyboard {
+  display: grid;
+  gap: 4px;
+  width: min(100%, 560px);
+  margin: 6px auto 0;
+  padding: 5px;
+  padding-bottom: max(5px, env(safe-area-inset-bottom));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mobile-keyboard-row { display: flex; justify-content: center; gap: 3px; }
+.mobile-keyboard-row button {
+  flex: 1 1 0;
+  min-width: 0;
+  height: clamp(24px, 7dvh, 44px);
+  padding: 0;
+  border: 1px solid var(--field-border);
+  border-radius: 5px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 16px;
+  cursor: pointer;
+}
+.mobile-keyboard-row:last-child button { font-size: 14px; }
+.mobile-keyboard-row .mobile-keyboard-space { flex-grow: 2.5; }
+.mobile-keyboard-row button:active,
+.mobile-keyboard-row button[aria-pressed="true"] { background: var(--hover); }
+.mobile-keyboard-row button[data-action="caps"] { font-size: 12px; }
+.mobile-keyboard-row button[data-action="all"] { flex-grow: 1.5; }
+.mobile-keyboard-status { margin: 0; padding: 2px 4px; color: var(--muted); font-size: 12px; }
