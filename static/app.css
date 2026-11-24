@@ -763,6 +763,12 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 }
 .mobile-keyboard-row button:active,
 .mobile-keyboard-row button[aria-pressed="true"] { background: var(--hover); }
+.mobile-keyboard-row button[data-caps-lock] {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.05;
+  white-space: normal;
+}
 .mobile-keyboard-row button[data-action="caps"] { font-size: 14px; }
 .mobile-keyboard-row button[data-action="all"] { flex-grow: 1.5; }
 .mobile-keyboard-status { margin: 0; padding: 2px 4px; color: var(--muted); font-size: 12px; }
