@@ -496,6 +496,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .reply-quote cite { color: var(--green); font-style: normal; font-weight: 700; }
 .composer-wrap { padding: 8px 0 10px; }
 .composer {
+  position: relative;
   padding: 10px 12px 9px;
   border: 1px solid var(--field-border);
   border-radius: 7px;
@@ -749,10 +750,42 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   font-size: 16px;
   cursor: pointer;
 }
-.mobile-keyboard-row:last-child button { font-size: 14px; }
-.mobile-keyboard-row .mobile-keyboard-space { flex-grow: 2.5; }
+.mobile-keyboard[data-layout="letters"] .mobile-keyboard-row:nth-child(3) { padding-inline: 5%; }
+.mobile-keyboard[data-layout="letters"] button:is([data-action="shift"], [data-action="delete"]) { flex-grow: 1.5; }
+.mobile-keyboard-row.mobile-keyboard-tools { justify-content: space-between; }
+.mobile-keyboard-tools button { flex: 0 0 auto; min-width: 44px; height: 26px; }
+.mobile-keyboard-tools button,
+.mobile-keyboard-bottom button { font-size: 14px; }
+.mobile-keyboard-bottom .mobile-keyboard-space { flex-grow: 4; }
+.mobile-keyboard-bottom .mobile-keyboard-return { flex-grow: 1.6; }
+.mobile-keyboard-row button:is([data-action="shift"], [data-action="delete"], [data-action="mode"], [data-action="more"], [data-action="emoji"]) {
+  background: var(--soft);
+}
 .mobile-keyboard-row button:active,
 .mobile-keyboard-row button[aria-pressed="true"] { background: var(--hover); }
-.mobile-keyboard-row button[data-action="caps"] { font-size: 12px; }
+.mobile-keyboard-row button[data-action="caps"] { font-size: 14px; }
 .mobile-keyboard-row button[data-action="all"] { flex-grow: 1.5; }
 .mobile-keyboard-status { margin: 0; padding: 2px 4px; color: var(--muted); font-size: 12px; }
+
+.mobile-composer-caret {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  color: transparent;
+  pointer-events: none;
+}
+.mobile-composer-caret span { position: relative; }
+.mobile-composer-caret span::after {
+  position: absolute;
+  inset-inline-start: 0;
+  bottom: 0;
+  width: 2px;
+  height: .9em;
+  background: var(--ink);
+  content: "";
+  animation: composer-caret-blink 1s step-end infinite;
+}
+@keyframes composer-caret-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .mobile-composer-caret span::after { animation: none; }
+}

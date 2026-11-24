@@ -17,9 +17,13 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.13.0";
+const APP_VERSION = "1.13.1";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.13.1": [
+    "The mobile keyboard now follows the familiar iPhone QWERTY layout.",
+    "A blinking cursor shows where the next character will appear.",
+  ],
   "1.13.0": [
     "Type with PIGIN’s mobile keyboard in World Chat, DMs, and group chats.",
     "Opening the keyboard scrolls to the newest message.",
@@ -3383,9 +3387,22 @@ mobileKeyboard.setAttribute("role", "group");
 mobileKeyboard.setAttribute("aria-label", "Pigin keyboard");
 mobileKeyboard.hidden = true;
 const keyboardFeeds = new Map([[messageInput, feed], [dmMessageInput, dmFeed]]);
-const keyboardLetters = ["qwertyuiop", "asdfghjkl", "zxcvbnm,."];
-const keyboardSymbols = ["1234567890", "-/:;()$&@\"", "?!'=+_#%*"];
-const keyboardMoreSymbols = ["[]{}", "<>^", "~`|\\"];
+const keyboardLetters = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+const keyboardSymbols = ["1234567890", "-/:;()$&@\"", ".,?!'"];
+const keyboardMoreSymbols = ["[]{}#%^*+=", "_\\|~<>`", "€£¥•"];
+const keyboardCaret = document.createElement("div");
+keyboardCaret.className = "mobile-composer-caret";
+keyboardCaret.setAttribute("aria-hidden", "true");
+keyboardCaret.hidden = true;
+const caretMarker = document.createElement("span");
+const caretBefore = document.createTextNode("");
+const caretAfter = document.createTextNode("");
+keyboardCaret.append(caretBefore, caretMarker, caretAfter);
+const caretStyleProperties = [
+  "font", "letterSpacing", "textAlign", "textIndent", "direction", "padding",
+  "whiteSpace", "overflowWrap", "wordBreak", "tabSize",
+];
+const caretResizeObserver = new ResizeObserver(updateKeyboardCaret);
 const keyboardHistory = new WeakMap();
 const keyboardStatus = document.createElement("p");
 keyboardStatus.className = "mobile-keyboard-status";
@@ -3394,9 +3411,32 @@ keyboardStatus.hidden = true;
 const graphemes = Intl.Segmenter && new Intl.Segmenter(undefined, { granularity: "grapheme" });
 let keyboardInput = null;
 let keyboardShift = false;
+let lastShiftTap = -Infinity;
 let keyboardCaps = false;
 let keyboardSelecting = false;
 let keyboardMode = "letters";
+
+function updateKeyboardCaret() {
+  const input = keyboardInput;
+  if (!input || input.disabled || input.selectionStart !== input.selectionEnd) {
+    keyboardCaret.hidden = true;
+    return;
+  }
+  const style = getComputedStyle(input);
+  for (const property of caretStyleProperties) keyboardCaret.style[property] = style[property];
+  Object.assign(keyboardCaret.style, {
+    left: `${input.offsetLeft}px`,
+    top: `${input.offsetTop}px`,
+    width: `${input.clientWidth}px`,
+    height: `${input.clientHeight}px`,
+  });
+  caretBefore.data = input.value.slice(0, input.selectionStart);
+  caretAfter.data = input.value.slice(input.selectionStart);
+  caretMarker.textContent = caretAfter.data ? "" : "\u200b";
+  keyboardCaret.hidden = false;
+  keyboardCaret.scrollTop = input.scrollTop;
+  keyboardCaret.scrollLeft = input.scrollLeft;
+}
 
 function syncMobileComposer() {
   hideMobileKeyboard();
@@ -3414,12 +3454,17 @@ function showMobileKeyboard(input) {
   hideMobileKeyboard();
   keyboardInput = input;
   keyboardShift = false;
+  lastShiftTap = -Infinity;
   keyboardCaps = false;
   keyboardSelecting = false;
   keyboardStatus.hidden = true;
   keyboardMode = "letters";
   renderMobileKeyboard();
   input.form.after(mobileKeyboard);
+  input.after(keyboardCaret);
+  caretResizeObserver.observe(input.form);
+  caretResizeObserver.observe(input);
+  updateKeyboardCaret();
   mobileKeyboard.hidden = false;
   scrollToLatestMessage("instant", keyboardFeeds.get(input));
 }
@@ -3427,6 +3472,8 @@ function showMobileKeyboard(input) {
 function hideMobileKeyboard() {
   if (!keyboardInput) return;
   keyboardInput = null;
+  keyboardCaret.hidden = true;
+  caretResizeObserver.disconnect();
   mobileKeyboard.hidden = true;
 }
 
@@ -3436,29 +3483,37 @@ function renderMobileKeyboard() {
     const value = keyboardShift !== keyboardCaps ? letter.toUpperCase() : letter;
     return [value, "insert", value];
   }));
-  if (keyboardMode === "letters") characterKeys[2].unshift(["Caps", "caps", "", "Caps Lock"]);
+  if (characterKeys) {
+    const leadingKey = {
+      letters: ["⇧", "shift", "", keyboardCaps ? "Turn off Caps Lock" : "Shift"],
+      symbols: ["#+=", "more", "", "More symbols"],
+      more: ["123", "more", "", "Numbers and punctuation"],
+    }[keyboardMode];
+    characterKeys[2].unshift(leadingKey);
+    characterKeys[2].push(["⌫", "delete", "", "Backspace"]);
+  }
   const keys = characterKeys ?? [
     [["←", "left", "", "Move left"], ["→", "right", "", "Move right"],
       ["Home", "home"], ["End", "end"], ["Del", "forwardDelete", "", "Delete forward"]],
     [["Select", "select"], ["Select all", "all"], ["Copy", "copy"], ["Cut", "cut"], ["Paste", "paste"]],
-    [["Undo", "undo"], ["Redo", "redo"]],
+    [["Undo", "undo"], ["Redo", "redo"], ["Caps Lock", "caps"]],
   ];
-  keys.push([
-    [keyboardMode === "letters" ? "123" : "ABC", "mode", "", "Switch letters and symbols"],
-    ...(keyboardMode === "edit" ? [] : [
-      keyboardMode === "letters"
-        ? ["⇧", "shift", "", "Shift"]
-        : [keyboardMode === "symbols" ? "#+=" : "123", "more", "", "Switch symbol pages"],
-    ]),
-    ["Space", "insert", " "],
-    ["↵", "insert", "\n", "New line"],
-    ["⌫", "delete", "", "Backspace"],
-    ...(keyboardMode === "edit" ? [] : [["Edit", "edit", "", "Editing controls"]]),
+  keys.unshift([
+    keyboardMode === "edit" ? ["ABC", "mode", "", "Back to letters"] : ["Edit", "edit", "", "Editing controls"],
     ["⌄", "hide", "", "Hide keyboard"],
   ]);
-  mobileKeyboard.replaceChildren(...keys.map(row => {
+  if (characterKeys) keys.push([
+    [keyboardMode === "letters" ? "123" : "ABC", "mode", "", "Switch letters and symbols"],
+    ["☺", "emoji", "", "Choose an emoji"],
+    ["space", "insert", " "],
+    ["return", "insert", "\n", "New line"],
+  ]);
+  mobileKeyboard.dataset.layout = keyboardMode;
+  mobileKeyboard.replaceChildren(...keys.map((row, index) => {
     const element = document.createElement("div");
     element.className = "mobile-keyboard-row";
+    if (index === 0) element.classList.add("mobile-keyboard-tools");
+    if (characterKeys && index === keys.length - 1) element.classList.add("mobile-keyboard-bottom");
     for (const [label, action, value, accessibleLabel] of row) {
       const button = document.createElement("button");
       button.type = "button";
@@ -3466,9 +3521,10 @@ function renderMobileKeyboard() {
       button.dataset.action = action;
       button.dataset.value = value;
       if (accessibleLabel) button.setAttribute("aria-label", accessibleLabel);
-      const pressed = { shift: keyboardShift, caps: keyboardCaps, select: keyboardSelecting };
+      const pressed = { shift: keyboardShift || keyboardCaps, caps: keyboardCaps, select: keyboardSelecting };
       if (Object.hasOwn(pressed, action)) button.setAttribute("aria-pressed", String(pressed[action]));
       if (value === " ") button.className = "mobile-keyboard-space";
+      if (value === "\n") button.className = "mobile-keyboard-return";
       element.append(button);
     }
     return element;
@@ -3574,14 +3630,24 @@ async function keyboardClipboard(input, action) {
 
 for (const [input, targetFeed] of keyboardFeeds) {
   input.addEventListener("focus", () => showMobileKeyboard(input));
-  input.addEventListener("click", () => showMobileKeyboard(input));
-  input.form.addEventListener("submit", () => keyboardHistory.delete(input));
+  input.addEventListener("click", () => {
+    showMobileKeyboard(input);
+    updateKeyboardCaret();
+  });
+  input.addEventListener("select", updateKeyboardCaret);
+  input.addEventListener("scroll", updateKeyboardCaret);
+  input.form.addEventListener("submit", () => {
+    keyboardHistory.delete(input);
+    updateKeyboardCaret();
+  });
   input.addEventListener("input", () => {
     if (keyboardInput !== input) return;
+    updateKeyboardCaret();
     const nearBottom = targetFeed.scrollHeight - targetFeed.scrollTop - targetFeed.clientHeight < 24;
     if (nearBottom) scrollToLatestMessage("instant", targetFeed);
   }, { capture: true });
 }
+document.addEventListener("selectionchange", updateKeyboardCaret);
 mobileKeyboard.addEventListener("pointerdown", event => {
   if (event.target.closest("button")) event.preventDefault();
 });
@@ -3596,13 +3662,32 @@ mobileKeyboard.addEventListener("click", event => {
   }
   const restoreFocus = document.activeElement === button;
   switch (action) {
-    case "shift": keyboardShift = !keyboardShift; break;
+    case "shift": {
+      const now = performance.now();
+      const doubleTap = now - lastShiftTap < 400;
+      if (keyboardCaps || doubleTap) {
+        keyboardCaps = !keyboardCaps;
+        keyboardShift = false;
+        lastShiftTap = -Infinity;
+      } else {
+        keyboardShift = !keyboardShift;
+        lastShiftTap = now;
+      }
+      break;
+    }
     case "caps": keyboardCaps = !keyboardCaps; break;
     case "select": keyboardSelecting = !keyboardSelecting; break;
     case "mode": keyboardMode = keyboardMode === "letters" ? "symbols" : "letters"; break;
     case "more": keyboardMode = keyboardMode === "symbols" ? "more" : "symbols"; break;
     case "edit": keyboardMode = "edit"; break;
-    case "all": keyboardInput.select(); return;
+    case "emoji":
+      event.stopPropagation();
+      keyboardInput.form.querySelector(".emoji-button").click();
+      return;
+    case "all":
+      keyboardInput.select();
+      updateKeyboardCaret();
+      return;
     case "copy":
     case "cut":
     case "paste": keyboardClipboard(keyboardInput, action); return;
@@ -3611,11 +3696,15 @@ mobileKeyboard.addEventListener("click", event => {
     case "left":
     case "right":
     case "home":
-    case "end": moveKeyboardSelection(keyboardInput, action); return;
+    case "end":
+      moveKeyboardSelection(keyboardInput, action);
+      updateKeyboardCaret();
+      return;
     default:
       editWithMobileKeyboard(keyboardInput, action, value);
       if (!keyboardShift || !/^[A-Z]$/i.test(value)) return;
       keyboardShift = false;
+      lastShiftTap = -Infinity;
   }
   if (keyboardMode !== "letters") keyboardShift = false;
   if (keyboardMode !== "edit") keyboardSelecting = false;
