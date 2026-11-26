@@ -24,9 +24,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='1.14.1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='1.14.1-keyboard-fields') }}">
   <script src="{{ url_for('static', filename='emoji-data.js', v='unicode-17.0') }}" defer></script>
-  <script src="{{ url_for('static', filename='app.js', v='1.14.1') }}" defer></script>
+  <script src="{{ url_for('static', filename='app.js', v='1.14.1-keyboard-fields') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -294,87 +294,95 @@
       </div>
     </main>
     <dialog class="delete-user-dialog tutorial-dialog" id="tutorialDialog" data-version="{{ tutorial_version }}" aria-label="PIGIN tutorial">
-      <p class="tutorial-progress" id="tutorialProgress"></p>
-      <section data-tutorial-step>
-        <h2 tabindex="-1">Explore World Chat</h2>
-        <p>World Chat is a shared room where everyone can read what you post. PIGIN gave you the animal username <strong id="tutorialAnimalName"></strong>. That’s the name people see beside your messages.</p>
-        <p>World Chat is designed to be anonymous. Keep personal details like your real name, school, and address out of public messages.</p>
-        <p><strong>Which name appears in World Chat?</strong></p>
-        <div class="tutorial-actions">
-          <button class="settings-toggle" type="button" data-privacy-answer="animal">Animal username</button>
-          <button class="settings-toggle" type="button" data-privacy-answer="private">Private Username</button>
+      <div class="keyboard-dialog-content">
+        <p class="tutorial-progress" id="tutorialProgress"></p>
+        <section data-tutorial-step>
+          <h2 tabindex="-1">Explore World Chat</h2>
+          <p>World Chat is a shared room where everyone can read what you post. PIGIN gave you the animal username <strong id="tutorialAnimalName"></strong>. That’s the name people see beside your messages.</p>
+          <p>World Chat is designed to be anonymous. Keep personal details like your real name, school, and address out of public messages.</p>
+          <p><strong>Which name appears in World Chat?</strong></p>
+          <div class="tutorial-actions">
+            <button class="settings-toggle" type="button" data-privacy-answer="animal">Animal username</button>
+            <button class="settings-toggle" type="button" data-privacy-answer="private">Private Username</button>
+          </div>
+          <p id="tutorialPrivacyFeedback" role="status"></p>
+        </section>
+        <section data-tutorial-step hidden>
+          <h2 tabindex="-1">Set up your private profile</h2>
+          <p>Open <strong>Settings</strong> to save an optional <strong>Private Username</strong> and change or remove your private profile photo. Other people can see them in DMs and group chats. Clear the name and tap Save to go back to your animal username.</p>
+          <p>World Chat only shows your animal username to help protect your identity. For your safety, choose a nickname that leaves out your real name and a photo that keeps your identity private. Either username works at sign-in.</p>
+          <label class="field-label" for="tutorialNickname">Try a nickname to preview your two names</label>
+          <input class="auth-input" id="tutorialNickname" type="text" maxlength="24" autocomplete="off" placeholder="CloudSketch">
+          <dl class="tutorial-preview">
+            <div><dt>World Chat</dt><dd id="tutorialWorldPreview"></dd></div>
+            <div><dt>DMs and groups</dt><dd id="tutorialPrivatePreview"></dd></div>
+          </dl>
+        </section>
+        <section data-tutorial-step hidden>
+          <h2 tabindex="-1">Find your account controls</h2>
+          <ul class="tutorial-settings">
+            <li><strong>Notifications</strong> turns alerts for new messages on or off. Use Mute in a chat to silence that conversation.</li>
+            <li><strong>Dark mode</strong> switches the app between light and dark.</li>
+            <li><strong>Log out</strong> signs you out on this device.</li>
+            <li><strong>Delete User</strong> permanently deletes your account after you confirm and enter your password.</li>
+          </ul>
+        </section>
+        <section data-tutorial-step hidden>
+          <h2 tabindex="-1">Start a direct message</h2>
+          <p>A DM is a one-on-one conversation. Open <strong>DMs</strong>, use <strong>Start a conversation</strong> to search for someone’s Private Username or their animal username if they haven’t set one, then choose their name and send a message.</p>
+          <label class="field-label" for="tutorialDmSearch">Practice by searching for MoonMoth</label>
+          <input class="auth-input" id="tutorialDmSearch" type="search" autocomplete="off" placeholder="MoonMoth">
+          <button class="settings-toggle" id="tutorialDmResult" type="button" hidden>MoonMoth · Open conversation</button>
+          <p id="tutorialDmFeedback" role="status"></p>
+        </section>
+        <section data-tutorial-step hidden>
+          <h2 tabindex="-1">Create a group chat</h2>
+          <p>Groups let several people chat together. In <strong>DMs</strong>, choose <strong>New group</strong>, name it, then search for and add at least two other people. Check <strong>Selected members</strong> before you tap <strong>Create group chat</strong>. Once it’s created, use <strong>Manage group</strong> to see who’s in it.</p>
+          <p><strong>Practice by choosing two people for a group.</strong></p>
+          <div class="tutorial-actions">
+            <button class="settings-toggle" type="button" data-practice-member="MoonMoth" aria-pressed="false">Add MoonMoth</button>
+            <button class="settings-toggle" type="button" data-practice-member="SkyFern" aria-pressed="false">Add SkyFern</button>
+          </div>
+          <p id="tutorialGroupFeedback" role="status">0 selected</p>
+          <button class="settings-toggle" id="tutorialPracticeCreate" type="button" disabled>Create practice group</button>
+        </section>
+        <section data-tutorial-step="2" hidden>
+          <h2 tabindex="-1">Try the shorter mobile keyboard</h2>
+          <p>Tap the message box in World Chat or a private conversation to open PIGIN’s mobile keyboard. The rows sit closer together now, so your thumbs can move between them more easily.</p>
+          <p>Tap <strong>Edit</strong> for editing controls or the <strong>down arrow</strong> to hide the keyboard and see more of the chat.</p>
+        </section>
+        <section data-tutorial-step="3" hidden>
+          <h2 tabindex="-1">Use PIGIN’s keyboard in any text box</h2>
+          <p>On mobile, tap any text box to open PIGIN’s keyboard, including group names, Private Username, and search. Tap <strong>Done</strong> to close the keyboard in a single-line field.</p>
+        </section>
+        <p class="composer-error" id="tutorialError" role="alert" hidden></p>
+        <div class="tutorial-actions tutorial-footer">
+          <button class="settings-toggle" id="tutorialSkip" type="button">Skip tour</button>
+          <button class="settings-toggle" id="tutorialBack" type="button">Back</button>
+          <button class="settings-toggle tutorial-next" id="tutorialNext" type="button">Next</button>
         </div>
-        <p id="tutorialPrivacyFeedback" role="status"></p>
-      </section>
-      <section data-tutorial-step hidden>
-        <h2 tabindex="-1">Set up your private profile</h2>
-        <p>Open <strong>Settings</strong> to save an optional <strong>Private Username</strong> and change or remove your private profile photo. Other people can see them in DMs and group chats. Clear the name and tap Save to go back to your animal username.</p>
-        <p>World Chat only shows your animal username to help protect your identity. For your safety, choose a nickname that leaves out your real name and a photo that keeps your identity private. Either username works at sign-in.</p>
-        <label class="field-label" for="tutorialNickname">Try a nickname to preview your two names</label>
-        <input class="auth-input" id="tutorialNickname" type="text" maxlength="24" autocomplete="off" placeholder="CloudSketch">
-        <dl class="tutorial-preview">
-          <div><dt>World Chat</dt><dd id="tutorialWorldPreview"></dd></div>
-          <div><dt>DMs and groups</dt><dd id="tutorialPrivatePreview"></dd></div>
-        </dl>
-      </section>
-      <section data-tutorial-step hidden>
-        <h2 tabindex="-1">Find your account controls</h2>
-        <ul class="tutorial-settings">
-          <li><strong>Notifications</strong> turns alerts for new messages on or off. Use Mute in a chat to silence that conversation.</li>
-          <li><strong>Dark mode</strong> switches the app between light and dark.</li>
-          <li><strong>Log out</strong> signs you out on this device.</li>
-          <li><strong>Delete User</strong> permanently deletes your account after you confirm and enter your password.</li>
-        </ul>
-      </section>
-      <section data-tutorial-step hidden>
-        <h2 tabindex="-1">Start a direct message</h2>
-        <p>A DM is a one-on-one conversation. Open <strong>DMs</strong>, use <strong>Start a conversation</strong> to search for someone’s Private Username or their animal username if they haven’t set one, then choose their name and send a message.</p>
-        <label class="field-label" for="tutorialDmSearch">Practice by searching for MoonMoth</label>
-        <input class="auth-input" id="tutorialDmSearch" type="search" autocomplete="off" placeholder="MoonMoth">
-        <button class="settings-toggle" id="tutorialDmResult" type="button" hidden>MoonMoth · Open conversation</button>
-        <p id="tutorialDmFeedback" role="status"></p>
-      </section>
-      <section data-tutorial-step hidden>
-        <h2 tabindex="-1">Create a group chat</h2>
-        <p>Groups let several people chat together. In <strong>DMs</strong>, choose <strong>New group</strong>, name it, then search for and add at least two other people. Check <strong>Selected members</strong> before you tap <strong>Create group chat</strong>. Once it’s created, use <strong>Manage group</strong> to see who’s in it.</p>
-        <p><strong>Practice by choosing two people for a group.</strong></p>
-        <div class="tutorial-actions">
-          <button class="settings-toggle" type="button" data-practice-member="MoonMoth" aria-pressed="false">Add MoonMoth</button>
-          <button class="settings-toggle" type="button" data-practice-member="SkyFern" aria-pressed="false">Add SkyFern</button>
-        </div>
-        <p id="tutorialGroupFeedback" role="status">0 selected</p>
-        <button class="settings-toggle" id="tutorialPracticeCreate" type="button" disabled>Create practice group</button>
-      </section>
-      <section data-tutorial-step="2" hidden>
-        <h2 tabindex="-1">Try the shorter mobile keyboard</h2>
-        <p>Tap the message box in World Chat or a private conversation to open PIGIN’s mobile keyboard. The rows sit closer together now, so your thumbs can move between them more easily.</p>
-        <p>Tap <strong>Edit</strong> for editing controls or the <strong>down arrow</strong> to hide the keyboard and see more of the chat.</p>
-      </section>
-      <p class="composer-error" id="tutorialError" role="alert" hidden></p>
-      <div class="tutorial-actions tutorial-footer">
-        <button class="settings-toggle" id="tutorialSkip" type="button">Skip tour</button>
-        <button class="settings-toggle" id="tutorialBack" type="button">Back</button>
-        <button class="settings-toggle tutorial-next" id="tutorialNext" type="button">Next</button>
       </div>
     </dialog>
     <dialog class="delete-user-dialog" id="deleteUserDialog" aria-labelledby="deleteUserTitle">
-      <h2 id="deleteUserTitle">Delete User</h2>
-      <div id="deleteUserConfirm">
-        <p>Are you sure you want to delete your account? This cannot be undone. Your World Chat messages will show as [DELETED], and your direct messages will be removed.</p>
-        <div class="delete-user-actions">
-          <button class="settings-toggle" id="cancelDeleteUser" type="button" autofocus>No, cancel</button>
-          <button class="settings-toggle" id="confirmDeleteUser" type="button">Yes, continue</button>
+      <div class="keyboard-dialog-content">
+        <h2 id="deleteUserTitle">Delete User</h2>
+        <div id="deleteUserConfirm">
+          <p>Are you sure you want to delete your account? This cannot be undone. Your World Chat messages will show as [DELETED], and your direct messages will be removed.</p>
+          <div class="delete-user-actions">
+            <button class="settings-toggle" id="cancelDeleteUser" type="button" autofocus>No, cancel</button>
+            <button class="settings-toggle" id="confirmDeleteUser" type="button">Yes, continue</button>
+          </div>
         </div>
+        <form id="deleteUserForm" hidden>
+          <label class="field-label" for="deleteUserPassword">Enter your password to delete your account</label>
+          <input class="auth-input" id="deleteUserPassword" type="password" autocomplete="current-password" required>
+          <p class="composer-error" id="deleteUserError" role="alert" hidden></p>
+          <div class="delete-user-actions">
+            <button class="settings-toggle" id="cancelDeleteUserPassword" type="button">Cancel</button>
+            <button class="settings-toggle" id="submitDeleteUser" type="submit">Delete User</button>
+          </div>
+        </form>
       </div>
-      <form id="deleteUserForm" hidden>
-        <label class="field-label" for="deleteUserPassword">Enter your password to delete your account</label>
-        <input class="auth-input" id="deleteUserPassword" type="password" autocomplete="current-password" required>
-        <p class="composer-error" id="deleteUserError" role="alert" hidden></p>
-        <div class="delete-user-actions">
-          <button class="settings-toggle" id="cancelDeleteUserPassword" type="button">Cancel</button>
-          <button class="settings-toggle" id="submitDeleteUser" type="submit">Delete User</button>
-        </div>
-      </form>
     </dialog>
     <div class="warning-screen" id="warningScreen" role="alertdialog" aria-modal="true" aria-labelledby="warningTitle" aria-describedby="warningText" hidden>
       <section class="warning-panel">

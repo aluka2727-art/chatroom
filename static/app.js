@@ -469,6 +469,7 @@ function setAuthMode(mode) {
 }
 
 function showLogin() {
+  hideMobileKeyboard();
   document.querySelector("#deleteUserDialog")?.close();
   clearInterval(pollingTimer);
   clearInterval(realtimeRefreshTimer);
@@ -660,6 +661,7 @@ function applyCurrentUser(user) {
 }
 
 function showRoom(user) {
+  hideMobileKeyboard();
   applyCurrentUser(user);
   loginScreen.hidden = true;
   room.hidden = false;
@@ -711,6 +713,7 @@ function showWarning(kind, message) {
   if (warningKind === "account") return;
   if (warningKind === "message" && kind !== "account") return;
   warningKind = kind;
+  hideMobileKeyboard();
   tutorialDialog.close();
   versionNotesScreen.hidden = true;
   document.querySelector("#warningTitle").textContent = kind === "account" ? "Account deleted" : "Message deleted";
@@ -738,6 +741,7 @@ const tutorialGroupFeedback = document.querySelector("#tutorialGroupFeedback");
 let tutorialStep = 0;
 
 function showTutorialStep(step) {
+  hideMobileKeyboard();
   tutorialStep = step;
   for (const section of allTutorialSteps) section.hidden = section !== tutorialSteps[step];
   document.querySelector("#tutorialProgress").textContent = `Step ${step + 1} of ${tutorialSteps.length}`;
@@ -3537,6 +3541,7 @@ emojiPickerWraps.forEach(wrap => {
   });
 });
 document.addEventListener("click", event => {
+  if (mobileKeyboard.contains(event.target)) return;
   emojiPickerWraps.forEach(wrap => {
     if (wrap.contains(event.target)) return;
     wrap.querySelector(".emoji-picker").hidden = true;
@@ -3564,7 +3569,9 @@ function usesMobileKeyboard() {
   return mobileDevice && mobileComposer.matches && !physicalKeyboardUsed;
 }
 const mobileKeyboard = document.getElementById("mobileKeyboard");
+const keyboardHome = mobileKeyboard.parentElement;
 const keyboardFeeds = new Map([[messageInput, feed], [dmMessageInput, dmFeed]]);
+const keyboardFields = document.querySelectorAll('textarea, input:is([type="text"], [type="search"], [type="password"], :not([type]))');
 const keyboardLetters = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 const keyboardSymbols = ["1234567890", "-/:;()$&@\"", ".,?!'"];
 const keyboardMoreSymbols = ["[]{}#%^*+=", "_\\|~<>`", "€£¥•"];
@@ -3610,8 +3617,8 @@ function positionKeyboardCaret() {
   const input = keyboardInput;
   if (!input) return;
   Object.assign(keyboardCaret.style, {
-    left: `${input.offsetLeft}px`,
-    top: `${input.offsetTop}px`,
+    left: `${input.offsetLeft + input.clientLeft}px`,
+    top: `${input.offsetTop + input.clientTop}px`,
     width: `${input.clientWidth}px`,
     height: `${input.clientHeight}px`,
   });
@@ -3623,8 +3630,9 @@ function updateKeyboardCaret() {
     keyboardCaret.hidden = true;
     return;
   }
-  caretBefore.data = input.value.slice(0, input.selectionStart);
-  caretAfter.data = input.value.slice(input.selectionStart);
+  const text = input.type === "password" ? "•".repeat(input.value.length) : input.value;
+  caretBefore.data = text.slice(0, input.selectionStart);
+  caretAfter.data = text.slice(input.selectionStart);
   const markerText = caretAfter.data ? "" : "\u200b";
   if (caretMarker.textContent !== markerText) caretMarker.textContent = markerText;
   keyboardCaret.hidden = false;
@@ -3667,10 +3675,10 @@ function flushKeyboardFrame() {
   updateKeyboardCaret();
 }
 
-function syncMobileComposer() {
+function syncMobileKeyboard() {
   hideMobileKeyboard();
   const useCustomKeyboard = usesMobileKeyboard();
-  for (const input of keyboardFeeds.keys()) {
+  for (const input of keyboardFields) {
     // Read-only also suppresses the native keyboard on browsers that ignore inputmode.
     input.readOnly = useCustomKeyboard;
     if (useCustomKeyboard) input.inputMode = "none";
@@ -3679,7 +3687,7 @@ function syncMobileComposer() {
 }
 
 function showMobileKeyboard(input) {
-  if (!usesMobileKeyboard() || input.disabled || keyboardInput === input) return;
+  if (!usesMobileKeyboard() || input.matches(":disabled") || input === keyboardInput || !input.getClientRects().length) return;
   hideMobileKeyboard();
   keyboardInput = input;
   keyboardShift = false;
@@ -3688,24 +3696,36 @@ function showMobileKeyboard(input) {
   keyboardSelecting = false;
   keyboardStatus.hidden = true;
   keyboardMode = "letters";
+  const targetFeed = keyboardFeeds.get(input);
+  const dialog = input.closest("dialog");
+  if (dialog) dialog.append(mobileKeyboard);
   renderMobileKeyboard();
   input.after(keyboardCaret);
-  caretResizeObserver.observe(input.form);
   caretResizeObserver.observe(input);
-  resizeComposer(input);
+  if (targetFeed) {
+    caretResizeObserver.observe(input.form);
+    resizeComposer(input);
+  }
+  mobileKeyboard.hidden = false;
+  if (targetFeed) scrollToLatestMessage("instant", targetFeed);
+  else input.scrollIntoView({ block: "nearest", inline: "nearest" });
   syncKeyboardCaretStyle();
   positionKeyboardCaret();
   updateKeyboardCaret();
-  mobileKeyboard.hidden = false;
-  scrollToLatestMessage("instant", keyboardFeeds.get(input));
 }
 
 function hideMobileKeyboard() {
   if (!keyboardInput) return;
+  if (keyboardInput.type === "password") keyboardHistory.delete(keyboardInput);
   keyboardInput = null;
+  caretBefore.data = caretAfter.data = "";
   keyboardCaret.hidden = true;
+  keyboardCaret.remove();
   caretResizeObserver.disconnect();
   mobileKeyboard.hidden = true;
+  if (mobileKeyboard.parentElement !== keyboardHome) {
+    keyboardHome.insertBefore(mobileKeyboard, keyboardHome.querySelector(".app-footer"));
+  }
 }
 
 function renderMobileKeyboard() {
@@ -3733,12 +3753,17 @@ function renderMobileKeyboard() {
     keyboardMode === "edit" ? ["ABC", "mode", "", "Back to letters"] : ["Edit", "edit", "", "Editing controls"],
     ["⌄", "hide", "", "Hide keyboard"],
   ]);
-  if (characterKeys) keys.push([
-    [keyboardMode === "letters" ? "123" : "ABC", "mode", "", "Switch letters and symbols"],
-    ["", "emoji", "", "Choose an emoji"],
-    ["space", "insert", " "],
-    ["return", "insert", "\n", "New line"],
-  ]);
+  if (characterKeys) {
+    const composer = keyboardFeeds.has(keyboardInput);
+    const bottomRow = [[keyboardMode === "letters" ? "123" : "ABC", "mode", "", "Switch letters and symbols"]];
+    if (composer) bottomRow.push(["", "emoji", "", "Choose an emoji"]);
+    bottomRow.push(["space", "insert", " "]);
+    bottomRow.push(composer ? ["return", "insert", "\n", "New line"] : ["Done", "hide"]);
+    keys.push(bottomRow);
+  }
+  if (keyboardInput.type === "password" && keyboardMode === "edit") {
+    keys[2] = keys[2].filter(([, action]) => action !== "copy" && action !== "cut");
+  }
   mobileKeyboard.dataset.layout = keyboardMode;
   mobileKeyboard.replaceChildren(...keys.map((row, index) => {
     const element = document.createElement("div");
@@ -3804,7 +3829,7 @@ function editWithMobileKeyboard(input, action, value = "") {
     if (action === "forwardDelete") end = adjacentCharacter(input.value, end, 1);
   }
   if (input.value.slice(start, end) === value) return;
-  if (input.value.length - (end - start) + value.length > input.maxLength) return;
+  if (input.maxLength >= 0 && input.value.length - (end - start) + value.length > input.maxLength) return;
   const history = composerHistory(input);
   history.undo.push(snapshot);
   history.redo.length = 0;
@@ -3854,8 +3879,8 @@ async function keyboardClipboard(input, action) {
     if (action === "cut") editWithMobileKeyboard(input, "delete");
     if (action === "paste" && text) {
       const available = input.maxLength - input.value.length + snapshot.end - snapshot.start;
-      const normalized = text.replace(/\r\n?/g, "\n");
-      let clipped = normalized.slice(0, available);
+      const normalized = input.tagName === "TEXTAREA" ? text.replace(/\r\n?/g, "\n") : text.replace(/[\r\n]/g, "");
+      let clipped = input.maxLength < 0 ? normalized : normalized.slice(0, Math.max(0, available));
       if (/[\uD800-\uDBFF]$/.test(clipped)) clipped = clipped.slice(0, -1);
       if (clipped) editWithMobileKeyboard(input, "insert", clipped);
     }
@@ -3866,7 +3891,7 @@ async function keyboardClipboard(input, action) {
   }
 }
 
-for (const input of keyboardFeeds.keys()) {
+for (const input of keyboardFields) {
   input.addEventListener("focus", () => showMobileKeyboard(input));
   input.addEventListener("click", () => {
     showMobileKeyboard(input);
@@ -3874,7 +3899,7 @@ for (const input of keyboardFeeds.keys()) {
   });
   input.addEventListener("select", scheduleKeyboardFrame);
   input.addEventListener("scroll", scheduleKeyboardFrame);
-  input.form.addEventListener("submit", () => {
+  input.form?.addEventListener("submit", () => {
     keyboardHistory.delete(input);
     pendingComposerResizes.delete(input);
     scheduleKeyboardFrame();
@@ -3939,7 +3964,7 @@ function updateKeyboardShiftKey() {
 }
 
 function activateMobileKey(button, event) {
-  if (!keyboardInput || keyboardInput.disabled) return;
+  if (!keyboardInput || keyboardInput.matches(":disabled")) return;
   const { action, value } = button.dataset;
   if (action === "hide") {
     if (mobileKeyboard.contains(document.activeElement)) keyboardInput.focus({ preventScroll: true });
@@ -4003,30 +4028,37 @@ function activateMobileKey(button, event) {
     mobileKeyboard.querySelector(`[data-action="${nextAction}"]`)?.focus({ preventScroll: true });
   }
 }
-document.addEventListener("pointerdown", event => {
-  if (keyboardInput && !keyboardInput.form.contains(event.target) && !mobileKeyboard.contains(event.target)) {
-    hideMobileKeyboard();
-  }
-});
+function dismissKeyboardOutsideInput(event) {
+  if (!keyboardInput || event.target === keyboardInput || mobileKeyboard.contains(event.target)) return;
+  const emojiWrap = event.target.closest(".emoji-picker-wrap");
+  if (emojiWrap && emojiWrap.closest("form") === keyboardInput.form) return;
+  hideMobileKeyboard();
+}
+document.addEventListener("pointerdown", dismissKeyboardOutsideInput);
+document.addEventListener("focusin", dismissKeyboardOutsideInput);
+for (const dialog of document.querySelectorAll("dialog")) {
+  dialog.addEventListener("close", () => {
+    if (dialog.contains(keyboardInput)) hideMobileKeyboard();
+  });
+}
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && keyboardInput) hideMobileKeyboard();
 });
 function detectPhysicalKeyboard(event) {
   if (!usesMobileKeyboard() || !event.isTrusted || event.isComposing ||
       !event.key || event.key === "Unidentified" || event.key === "Process") return;
-  // Other editable fields can produce trusted key events from the phone keyboard.
-  if (!keyboardFeeds.has(event.target) &&
-      event.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  // Ignore key events from editable controls that still use the native keyboard.
+  if (event.target.closest?.("input, textarea, select, [contenteditable]") && !event.target.readOnly) return;
   physicalKeyboardUsed = true;
   // Restore editability before the browser handles the key's default action.
   const focusedInput = mobileKeyboard.contains(document.activeElement) ? keyboardInput : null;
-  syncMobileComposer();
+  syncMobileKeyboard();
   focusedInput?.focus({ preventScroll: true });
 }
 
 document.addEventListener("keydown", detectPhysicalKeyboard, true);
-mobileComposer.addEventListener("change", syncMobileComposer);
-syncMobileComposer();
+mobileComposer.addEventListener("change", syncMobileKeyboard);
+syncMobileKeyboard();
 
 syncDmEmojiButtons();
 initialize();

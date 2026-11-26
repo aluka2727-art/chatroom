@@ -728,7 +728,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   width: 100%;
   padding-inline: 0;
 }
-.shell:has(> .mobile-keyboard:not([hidden])) > .room {
+.shell:has(> .mobile-keyboard:not([hidden])) > :is(.room, .login-screen) {
   width: min(1100px, 100%);
   margin-inline: auto;
   padding-inline: var(--shell-gutter);
@@ -744,6 +744,20 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   touch-action: manipulation;
   user-select: none;
   -webkit-user-select: none;
+}
+dialog[open]:has(> .mobile-keyboard:not([hidden])) {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(var(--app-height, 100dvh) - 16px);
+  overflow: hidden;
+}
+dialog[open]:has(> .mobile-keyboard:not([hidden])) > .keyboard-dialog-content {
+  min-height: 0;
+  overflow-y: auto;
+}
+dialog > .mobile-keyboard {
+  flex-shrink: 0;
+  margin: 12px -16px -16px;
 }
 .mobile-keyboard-row { display: flex; justify-content: center; gap: 3px; }
 .mobile-keyboard-row button {

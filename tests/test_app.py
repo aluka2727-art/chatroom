@@ -158,6 +158,13 @@ class ChatroomTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["user"]["tutorial_version"], 2)
         self.assertEqual(fresh_client.get("/api/session").json["user"]["tutorial_version"], 2)
+        response = fresh_client.post(
+            "/api/tutorial/complete",
+            json={"version": 3},
+            headers={"X-CSRF-Token": response.json["csrf_token"]},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["tutorial_version"], 3)
 
     def create_admin(self):
         result = self.app.test_cli_runner().invoke(

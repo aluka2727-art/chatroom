@@ -46,3 +46,36 @@ test('a refresh received during a DM fetch is followed immediately', async () =>
   assert.equal(requests[1].url, '/api/dms/1?after=7');
   requests[1].resolve({ messages: [] });
 });
+
+test('custom keyboard edits single-line fields with and without a length limit', () => {
+  const editing = source.slice(
+    source.indexOf('function composerSnapshot'),
+    source.indexOf('function restoreKeyboardEdit'),
+  );
+  const context = vm.createContext({ keyboardHistory: new WeakMap(), Event });
+  vm.runInContext(editing, context);
+
+  const input = {
+    value: '',
+    selectionStart: 0,
+    selectionEnd: 0,
+    maxLength: -1,
+    events: [],
+    setRangeText(value, start, end) {
+      this.value = this.value.slice(0, start) + value + this.value.slice(end);
+      this.selectionStart = this.selectionEnd = start + value.length;
+    },
+    dispatchEvent(event) { this.events.push(event); },
+  };
+  context.editWithMobileKeyboard(input, 'insert', 'A');
+  assert.equal(input.value, 'A');
+  assert.equal(input.events[0].type, 'input');
+  assert.equal(input.events[0].bubbles, true);
+
+  input.maxLength = 2;
+  context.editWithMobileKeyboard(input, 'insert', 'BC');
+  assert.equal(input.value, 'A');
+  input.selectionStart = 0;
+  context.editWithMobileKeyboard(input, 'insert', 'BC');
+  assert.equal(input.value, 'BC');
+});
