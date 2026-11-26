@@ -563,6 +563,16 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .send-button { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 4px; background: var(--green); color: var(--on-green); font-size: 11px; font-weight: 600; }
 .send-button:hover:not(:disabled) { background: var(--green-deep); }
 .send-button:disabled { cursor: default; opacity: .42; }
+.mobile-composer .composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+}
+.mobile-composer .composer > :is(.reply-preview, .composer-error) { grid-column: 1 / -1; }
+.mobile-composer .composer textarea { max-height: 34px; }
+.mobile-composer .composer .emoji-button { display: none; }
+.mobile-composer .composer .emoji-picker-wrap { position: static; }
 .admin-panel { overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 20px 22px; }
 .panel-toolbar { display: flex; justify-content: flex-end; margin-bottom: 4px; }
 .admin-refresh { padding: 7px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); cursor: pointer; font-size: 10px; }
@@ -736,9 +746,10 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .shell:has(> .mobile-keyboard:not([hidden])) .composer-wrap { padding-bottom: 8px; }
 .mobile-keyboard:not([hidden]) + .app-footer { display: none; }
 .mobile-keyboard {
+  --key-height: clamp(24px, 6.75dvh, 51px);
   display: grid;
-  gap: 5px;
-  padding: 4px max(4px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+  gap: 3px;
+  padding: 4px max(4px, env(safe-area-inset-right)) calc(var(--key-height) + max(4px, env(safe-area-inset-bottom))) max(4px, env(safe-area-inset-left));
   border-top: 1px solid var(--line);
   background: var(--surface);
   touch-action: manipulation;
@@ -759,11 +770,11 @@ dialog > .mobile-keyboard {
   flex-shrink: 0;
   margin: 12px -16px -16px;
 }
-.mobile-keyboard-row { display: flex; justify-content: center; gap: 3px; }
+.mobile-keyboard-row { display: flex; justify-content: center; gap: 2px; }
 .mobile-keyboard-row button {
   flex: 1 1 0;
   min-width: 0;
-  height: clamp(24px, 6.75dvh, 51px);
+  height: var(--key-height);
   padding: 0;
   border: 1px solid var(--field-border);
   border-radius: 5px;
@@ -772,8 +783,19 @@ dialog > .mobile-keyboard {
   font-size: 20px;
   cursor: pointer;
 }
-.mobile-keyboard[data-layout="letters"] .mobile-keyboard-row:nth-child(2) { padding-inline: 5%; }
-.mobile-keyboard[data-layout="letters"] button:is([data-action="shift"], [data-action="delete"]) { flex-grow: 1.5; }
+@media (orientation: portrait) and (min-height: 550px) {
+  .mobile-keyboard { --key-height: clamp(44px, 6.75dvh, 51px); }
+}
+.mobile-keyboard[data-layout="letters"] .mobile-keyboard-row:not(.mobile-keyboard-bottom) {
+  display: grid;
+  grid-template-columns: repeat(20, minmax(0, 1fr));
+}
+.mobile-keyboard[data-layout="letters"] .mobile-keyboard-row:not(.mobile-keyboard-bottom) button { grid-column: span 2; }
+.mobile-keyboard[data-layout="letters"] .mobile-keyboard-row:nth-child(2) button:first-child { grid-column: 2 / span 2; }
+.mobile-keyboard[data-layout="letters"] .mobile-keyboard-row button:is([data-action="shift"], [data-action="delete"]) {
+  grid-column: span 3;
+}
+.mobile-keyboard-bottom { gap: 3px; }
 .mobile-keyboard-bottom button { font-size: 14px; }
 .mobile-keyboard button[data-action="emoji"] { display: grid; place-items: center; }
 .mobile-keyboard-bottom .mobile-keyboard-space { flex-grow: 4; }
@@ -802,9 +824,10 @@ dialog > .mobile-keyboard {
 .mobile-composer-caret span::after {
   position: absolute;
   inset-inline-start: 0;
-  bottom: 0;
+  top: 50%;
+  transform: translateY(-50%);
   width: 2px;
-  height: .9em;
+  height: 1em;
   background: var(--ink);
   content: "";
   animation: composer-caret-blink 1s step-end infinite;

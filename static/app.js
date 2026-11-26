@@ -17,9 +17,14 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.14.1";
+const APP_VERSION = "1.14.2";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.14.2": [
+    "The mobile keyboard sits one row higher, with staggered letter rows and larger touch targets.",
+    "Tap Send to keep typing, or use the keyboard’s emoji key to open the picker.",
+    "The mobile composer fits on one row, with a blinking cursor sized to the text.",
+  ],
   "1.14.1": [
     "The optimized keyboard has medium-height keys and a simpler layout.",
     "The illustrated install guide shows how to add PIGIN as a web app on your device.",
@@ -3610,6 +3615,7 @@ function usesMobileKeyboard() {
 const mobileKeyboard = document.getElementById("mobileKeyboard");
 const keyboardHome = mobileKeyboard.parentElement;
 const keyboardFeeds = new Map([[messageInput, feed], [dmMessageInput, dmFeed]]);
+const keyboardSendButtons = new Map([[messageInput, sendButton], [dmMessageInput, dmSendButton]]);
 const keyboardFields = document.querySelectorAll('textarea, input:is([type="text"], [type="search"], [type="password"], :not([type]))');
 const keyboardLetters = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 const keyboardSymbols = ["1234567890", "-/:;()$&@\"", ".,?!'"];
@@ -3623,7 +3629,7 @@ const caretBefore = document.createTextNode("");
 const caretAfter = document.createTextNode("");
 keyboardCaret.append(caretBefore, caretMarker, caretAfter);
 const caretStyleProperties = [
-  "font", "letterSpacing", "textAlign", "textIndent", "direction", "padding",
+  "font", "fontSize", "lineHeight", "letterSpacing", "textAlign", "textIndent", "direction", "padding",
   "whiteSpace", "overflowWrap", "wordBreak", "tabSize",
 ];
 const caretResizeObserver = new ResizeObserver(() => {
@@ -3714,6 +3720,7 @@ function flushKeyboardFrame() {
 
 function syncMobileKeyboard() {
   hideMobileKeyboard();
+  document.documentElement.classList.toggle("mobile-composer", mobileDevice && mobileComposer.matches);
   const useCustomKeyboard = usesMobileKeyboard();
   for (const input of keyboardFields) {
     // Read-only also suppresses the native keyboard on browsers that ignore inputmode.
@@ -3865,6 +3872,9 @@ for (const input of keyboardFields) {
   input.addEventListener("select", scheduleKeyboardFrame);
   input.addEventListener("scroll", scheduleKeyboardFrame);
   input.form?.addEventListener("submit", () => {
+    if (keyboardInput === input && keyboardSendButtons.has(input)) {
+      input.focus({ preventScroll: true });
+    }
     pendingComposerResizes.delete(input);
     scheduleKeyboardFrame();
   });
@@ -3879,8 +3889,8 @@ function nearestTypingKey(event) {
   const { clientX: x, clientY: y } = event;
   const rows = [...mobileKeyboard.querySelectorAll(".mobile-keyboard-row")];
   const bounds = rows.map(row => row.getBoundingClientRect());
-  // Split the gaps between rows at their midpoints.
-  if (!bounds.length || y < bounds[0].top || y > bounds.at(-1).bottom + 5) return null;
+  // The keyboard padding belongs to the outer rows. Split the inner gaps at their midpoints.
+  if (!bounds.length || y > bounds.at(-1).bottom + 5) return null;
   const index = bounds.findIndex((rect, i) => i === bounds.length - 1 || y <= (rect.bottom + bounds[i + 1].top) / 2);
   const buttons = [...rows[index].querySelectorAll("button")];
   for (const [i, button] of buttons.entries()) {
@@ -3974,6 +3984,7 @@ function activateMobileKey(button, event) {
 }
 function dismissKeyboardOutsideInput(event) {
   if (!keyboardInput || event.target === keyboardInput || mobileKeyboard.contains(event.target)) return;
+  if (keyboardSendButtons.get(keyboardInput)?.contains(event.target)) return;
   const emojiWrap = event.target.closest(".emoji-picker-wrap");
   if (emojiWrap && emojiWrap.closest("form") === keyboardInput.form) return;
   hideMobileKeyboard();

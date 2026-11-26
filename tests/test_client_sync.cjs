@@ -6,6 +6,36 @@ const fs = require('node:fs');
 const source = fs.readFileSync('static/app.js', 'utf8');
 const dmLoader = source.slice(source.indexOf('let dmReloadRequested = false;'), source.indexOf('function appendAdminEmpty'));
 
+test('tapping Send keeps the active chat keyboard open', () => {
+  const dismissal = source.slice(
+    source.indexOf('function dismissKeyboardOutsideInput'),
+    source.indexOf('document.addEventListener("pointerdown", dismissKeyboardOutsideInput)'),
+  );
+  const worldInput = {};
+  const dmInput = {};
+  const worldSendIcon = { closest: () => null };
+  const dmSendIcon = { closest: () => null };
+  let dismissals = 0;
+  const context = vm.createContext({
+    keyboardInput: worldInput,
+    mobileKeyboard: { contains: () => false },
+    keyboardSendButtons: new Map([
+      [worldInput, { contains: target => target === worldSendIcon }],
+      [dmInput, { contains: target => target === dmSendIcon }],
+    ]),
+    hideMobileKeyboard() { dismissals++; },
+  });
+  vm.runInContext(dismissal, context);
+
+  context.dismissKeyboardOutsideInput({ target: worldSendIcon });
+  context.keyboardInput = dmInput;
+  context.dismissKeyboardOutsideInput({ target: dmSendIcon });
+  assert.equal(dismissals, 0);
+
+  context.dismissKeyboardOutsideInput({ target: worldSendIcon });
+  assert.equal(dismissals, 1);
+});
+
 function client() {
   const requests = [];
   const context = vm.createContext({
