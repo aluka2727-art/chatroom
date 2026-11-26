@@ -52,6 +52,7 @@ ANIMALS = (
     "Grasshopper", "Hawk", "Antelope",
 )
 RESERVED_USERNAMES = {"Cricket", "Viper"}
+TUTORIAL_VERSION = 2
 MAX_ACCOUNTS = 100
 MAX_MESSAGE_LENGTH = 500
 MAX_GROUP_NAME_LENGTH = 48
@@ -1125,7 +1126,7 @@ def create_app(test_config=None):
     @app.get("/")
     def index():
         csrf_token()
-        return render_template("index.html")
+        return render_template("index.html", tutorial_version=TUTORIAL_VERSION)
 
     @app.get("/share")
     def share_target():
@@ -1296,13 +1297,23 @@ def create_app(test_config=None):
     @app.post("/api/tutorial/complete")
     @login_required
     def api_complete_tutorial():
+        # Clients from v1.14.0 completed only the original tour and sent no body.
+        data = request.get_json(silent=True)
+        version = data.get("version") if isinstance(data, dict) else 1
+        if type(version) is not int or not 1 <= version <= TUTORIAL_VERSION:
+            return jsonify(error="Refresh PIGIN to load the current tutorial."), 400
         database = get_db()
-        database.execute(
-            "UPDATE accounts SET tutorial_version = 1 WHERE id = ? AND tutorial_version < 1",
-            (g.account["id"],),
-        )
+        account = database.execute(
+            """
+            UPDATE accounts
+            SET tutorial_version = CASE WHEN tutorial_version < ? THEN ? ELSE tutorial_version END
+            WHERE id = ?
+            RETURNING tutorial_version
+            """,
+            (version, version, g.account["id"]),
+        ).fetchone()
         database.commit()
-        return jsonify(tutorial_version=1)
+        return jsonify(tutorial_version=account["tutorial_version"])
 
     @app.post("/api/warnings/acknowledge")
     @login_required

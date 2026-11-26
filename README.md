@@ -127,3 +127,11 @@ flask --app /home/YOURUSERNAME/chatroom/app.py delete-non-admin-accounts
 ```
 
 The second command requires at least one admin account, deletes only member accounts, and retains messages as `[DELETED]`. Admin accounts are protected from the single-user delete command.
+
+### Updating the tutorial
+
+For a release that introduces a feature, increment `TUTORIAL_VERSION` in
+`app.py` and add a section to the tutorial dialog in `index.html` with
+`data-tutorial-step` set to that number. Returning users see the steps added
+since their last completed or skipped tour. New accounts see the full tour.
+Keep the tutorial version the same for releases without new features.

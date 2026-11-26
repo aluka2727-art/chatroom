@@ -24,9 +24,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='1.14.0') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='1.14.1') }}">
   <script src="{{ url_for('static', filename='emoji-data.js', v='unicode-17.0') }}" defer></script>
-  <script src="{{ url_for('static', filename='app.js', v='1.14.0') }}" defer></script>
+  <script src="{{ url_for('static', filename='app.js', v='1.14.1') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -293,7 +293,7 @@
         </div>
       </div>
     </main>
-    <dialog class="delete-user-dialog tutorial-dialog" id="tutorialDialog" aria-label="PIGIN tutorial">
+    <dialog class="delete-user-dialog tutorial-dialog" id="tutorialDialog" data-version="{{ tutorial_version }}" aria-label="PIGIN tutorial">
       <p class="tutorial-progress" id="tutorialProgress"></p>
       <section data-tutorial-step>
         <h2 tabindex="-1">Explore World Chat</h2>
@@ -345,6 +345,11 @@
         <p id="tutorialGroupFeedback" role="status">0 selected</p>
         <button class="settings-toggle" id="tutorialPracticeCreate" type="button" disabled>Create practice group</button>
       </section>
+      <section data-tutorial-step="2" hidden>
+        <h2 tabindex="-1">Try the shorter mobile keyboard</h2>
+        <p>Tap the message box in World Chat or a private conversation to open PIGIN’s mobile keyboard. The rows sit closer together now, so your thumbs can move between them more easily.</p>
+        <p>Tap <strong>Edit</strong> for editing controls or the <strong>down arrow</strong> to hide the keyboard and see more of the chat.</p>
+      </section>
       <p class="composer-error" id="tutorialError" role="alert" hidden></p>
       <div class="tutorial-actions tutorial-footer">
         <button class="settings-toggle" id="tutorialSkip" type="button">Skip tour</button>
@@ -388,7 +393,7 @@
       </section>
     </div>
     <div class="mobile-keyboard" id="mobileKeyboard" role="group" aria-label="Pigin keyboard" hidden></div>
-    <footer class="app-footer">v1.14.0</footer>
+    <footer class="app-footer">v1.14.1</footer>
   </div>
   <div class="app-loading" id="appLoading" role="status" aria-label="Loading PIGIN">
     <div class="loading-indicator">

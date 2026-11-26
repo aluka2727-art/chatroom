@@ -737,8 +737,8 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .mobile-keyboard:not([hidden]) + .app-footer { display: none; }
 .mobile-keyboard {
   display: grid;
-  gap: 6px;
-  padding: 6px max(4px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+  gap: 4px;
+  padding: 4px max(4px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
   border-top: 1px solid var(--line);
   background: var(--surface);
   touch-action: manipulation;
@@ -749,7 +749,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .mobile-keyboard-row button {
   flex: 1 1 0;
   min-width: 0;
-  height: clamp(24px, 8dvh, 60px);
+  height: clamp(24px, 5.5dvh, 42px);
   padding: 0;
   border: 1px solid var(--field-border);
   border-radius: 5px;
@@ -761,7 +761,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .mobile-keyboard[data-layout="letters"] .mobile-keyboard-row:nth-child(3) { padding-inline: 5%; }
 .mobile-keyboard[data-layout="letters"] button:is([data-action="shift"], [data-action="delete"]) { flex-grow: 1.5; }
 .mobile-keyboard-row.mobile-keyboard-tools { justify-content: space-between; }
-.mobile-keyboard-tools button { flex: 0 0 auto; min-width: 48px; height: clamp(26px, 5dvh, 38px); }
+.mobile-keyboard-tools button { flex: 0 0 auto; min-width: 48px; height: clamp(26px, 4dvh, 32px); }
 .mobile-keyboard-tools button,
 .mobile-keyboard-bottom button { font-size: 14px; }
 .mobile-keyboard button[data-action="emoji"] { display: grid; place-items: center; }

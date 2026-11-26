@@ -17,10 +17,12 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.14.0";
-const TUTORIAL_VERSION = 1;
+const APP_VERSION = "1.14.1";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.14.1": [
+    "The mobile keyboard is shorter, with less space between rows.",
+  ],
   "1.14.0": [
     "A guided tour introduces World Chat, Private Usernames, and private conversations.",
     "The new group form keeps your selected members visible as you search.",
@@ -719,7 +721,9 @@ function showWarning(kind, message) {
 }
 
 const tutorialDialog = document.querySelector("#tutorialDialog");
-const tutorialSteps = [...tutorialDialog.querySelectorAll("[data-tutorial-step]")];
+const tutorialVersion = Number(tutorialDialog.dataset.version);
+const allTutorialSteps = [...tutorialDialog.querySelectorAll("[data-tutorial-step]")];
+let tutorialSteps = [];
 const tutorialNext = document.querySelector("#tutorialNext");
 const tutorialBack = document.querySelector("#tutorialBack");
 const tutorialSkip = document.querySelector("#tutorialSkip");
@@ -735,7 +739,7 @@ let tutorialStep = 0;
 
 function showTutorialStep(step) {
   tutorialStep = step;
-  tutorialSteps.forEach((section, index) => { section.hidden = index !== step; });
+  for (const section of allTutorialSteps) section.hidden = section !== tutorialSteps[step];
   document.querySelector("#tutorialProgress").textContent = `Step ${step + 1} of ${tutorialSteps.length}`;
   tutorialBack.hidden = step === 0;
   tutorialNext.textContent = step === tutorialSteps.length - 1 ? "Finish tour" : "Next";
@@ -754,11 +758,14 @@ function updateTutorialGroup() {
 
 function showWelcome() {
   if (!currentUser || warningKind) return;
-  if (currentUser.tutorial_version >= TUTORIAL_VERSION) {
+  const completedVersion = currentUser.tutorial_version || 0;
+  if (completedVersion >= tutorialVersion) {
     maybeShowVersionNotes();
     return;
   }
   if (tutorialDialog.open) return;
+  tutorialSteps = allTutorialSteps.filter(section => Number(section.dataset.tutorialStep || 1) > completedVersion);
+  if (!tutorialSteps.length) return;
   document.querySelector("#tutorialAnimalName").textContent = currentUser.username;
   document.querySelector("#tutorialWorldPreview").textContent = currentUser.username;
   document.querySelector("#tutorialPrivacyFeedback").textContent = "";
@@ -773,6 +780,7 @@ function showWelcome() {
   }
   updateTutorialGroup();
   tutorialError.hidden = true;
+  hideMobileKeyboard();
   tutorialDialog.showModal();
   showTutorialStep(0);
 }
@@ -783,7 +791,10 @@ async function completeTutorial() {
   tutorialSkip.disabled = tutorialBack.disabled = tutorialNext.disabled = true;
   tutorialError.hidden = true;
   try {
-    const data = await api("/api/tutorial/complete", { method: "POST" });
+    const data = await api("/api/tutorial/complete", {
+      method: "POST",
+      body: JSON.stringify({ version: tutorialVersion }),
+    });
     if (currentUser?.id !== accountId) return;
     currentUser.tutorial_version = data.tutorial_version;
     tutorialDialog.close();
