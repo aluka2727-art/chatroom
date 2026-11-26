@@ -24,9 +24,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='1.13.2') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='1.14.0') }}">
   <script src="{{ url_for('static', filename='emoji-data.js', v='unicode-17.0') }}" defer></script>
-  <script src="{{ url_for('static', filename='app.js', v='1.13.2') }}" defer></script>
+  <script src="{{ url_for('static', filename='app.js', v='1.14.0') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -43,7 +43,7 @@
           <div class="auth-fields">
             <div class="field-group" id="usernameGroup" hidden>
               <label class="field-label" for="usernameInput">Username</label>
-              <input class="auth-input" id="usernameInput" type="text" autocomplete="username" autocapitalize="words" maxlength="24" placeholder="Otter or display name">
+              <input class="auth-input" id="usernameInput" type="text" autocomplete="username" autocapitalize="words" maxlength="24" placeholder="Otter or Private Username">
             </div>
             <div class="field-group">
               <label class="field-label" for="passwordInput">Password</label>
@@ -142,18 +142,25 @@
                 </header>
                 <form class="dm-search" id="dmSearchForm" role="search">
                   <label class="field-label" for="dmSearchInput">Start a conversation</label>
-                  <input class="auth-input" id="dmSearchInput" type="search" maxlength="24" placeholder="Search display or animal name" autocomplete="off" aria-label="Search for someone to message">
+                  <input class="auth-input" id="dmSearchInput" type="search" maxlength="24" placeholder="Search Private Username or animal name" autocomplete="off" aria-label="Search for someone to message">
                   <p class="dm-search-hint">Search a username to message someone new.</p>
                 </form>
                 <div class="dm-search-results" id="dmSearchResults" hidden></div>
                 <form class="group-create-panel" id="groupCreatePanel" hidden>
-                  <label class="field-label" for="groupNameInput">Group name</label>
-                  <input class="auth-input" id="groupNameInput" type="text" maxlength="48" placeholder="Name this group" required>
-                  <label class="field-label" for="groupMemberSearch">Add at least two people</label>
-                  <input class="auth-input" id="groupMemberSearch" type="search" maxlength="24" placeholder="Search usernames" autocomplete="off">
-                  <div class="group-member-results" id="groupMemberResults"></div>
-                  <p class="composer-error" id="groupCreateError" role="alert" hidden></p>
-                  <button class="settings-toggle" id="createGroupSubmit" type="submit" disabled>Create group chat</button>
+                  <fieldset aria-label="Group details">
+                    <label class="field-label" for="groupNameInput">Group name</label>
+                    <input class="auth-input" id="groupNameInput" type="text" maxlength="48" placeholder="Name this group" required>
+                    <div class="group-selection">
+                      <strong>Selected members</strong>
+                      <p id="groupSelectionCount" role="status">0 selected · Add at least 2 people</p>
+                      <div class="group-selection-list" id="groupSelectedMembers"></div>
+                    </div>
+                    <label class="field-label" for="groupMemberSearch">Find people to add</label>
+                    <input class="auth-input" id="groupMemberSearch" type="search" maxlength="24" placeholder="Search usernames" autocomplete="off">
+                    <div class="group-member-results" id="groupMemberResults"></div>
+                    <p class="composer-error" id="groupCreateError" role="alert" hidden></p>
+                    <button class="settings-toggle" id="createGroupSubmit" type="submit" disabled>Create group chat</button>
+                  </fieldset>
                 </form>
                 <h4 class="dm-section-heading">Group chats</h4>
                 <nav class="dm-contacts dm-group-contacts" id="dmGroupContacts" aria-label="Group chats"></nav>
@@ -229,17 +236,17 @@
                   <div class="settings-avatar" id="settingsAvatar" aria-hidden="true">?</div>
                   <div class="settings-avatar-actions">
                     <label class="settings-upload">
-                      Change photo
+                      Change private photo
                       <input id="avatarInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
                     </label>
                     <button class="settings-link" id="removeAvatarButton" type="button" hidden>Remove photo</button>
                   </div>
                 </div>
                 <form class="settings-profile-form" id="displayNameForm">
-                  <label class="field-label" for="displayNameInput">Display name</label>
-                  <p class="settings-hint">Shown in DMs only. World Chat stays anonymous as <span id="settingsAnimalName">—</span>. You can still sign in with either name.</p>
+                  <label class="field-label" for="displayNameInput">Private Username</label>
+                  <p class="settings-hint">Your Private Username and photo are used in DMs and group chats. World Chat uses your animal username, <span id="settingsAnimalName">—</span>, to help keep you anonymous. Choose a nickname instead of your real name. Either username works at sign-in.</p>
                   <div class="settings-name-row">
-                    <input class="auth-input" id="displayNameInput" type="text" maxlength="24" placeholder="Optional display name" autocomplete="nickname">
+                    <input class="auth-input" id="displayNameInput" type="text" maxlength="24" placeholder="Optional nickname" autocomplete="nickname">
                     <button class="settings-toggle" id="saveDisplayName" type="submit">Save</button>
                   </div>
                   <p class="composer-error" id="profileError" role="alert" hidden></p>
@@ -286,6 +293,65 @@
         </div>
       </div>
     </main>
+    <dialog class="delete-user-dialog tutorial-dialog" id="tutorialDialog" aria-label="PIGIN tutorial">
+      <p class="tutorial-progress" id="tutorialProgress"></p>
+      <section data-tutorial-step>
+        <h2 tabindex="-1">Explore World Chat</h2>
+        <p>World Chat is a shared room where everyone can read what you post. PIGIN gave you the animal username <strong id="tutorialAnimalName"></strong>. That’s the name people see beside your messages.</p>
+        <p>World Chat is designed to be anonymous. Keep personal details like your real name, school, and address out of public messages.</p>
+        <p><strong>Which name appears in World Chat?</strong></p>
+        <div class="tutorial-actions">
+          <button class="settings-toggle" type="button" data-privacy-answer="animal">Animal username</button>
+          <button class="settings-toggle" type="button" data-privacy-answer="private">Private Username</button>
+        </div>
+        <p id="tutorialPrivacyFeedback" role="status"></p>
+      </section>
+      <section data-tutorial-step hidden>
+        <h2 tabindex="-1">Set up your private profile</h2>
+        <p>Open <strong>Settings</strong> to save an optional <strong>Private Username</strong> and change or remove your private profile photo. Other people can see them in DMs and group chats. Clear the name and tap Save to go back to your animal username.</p>
+        <p>World Chat only shows your animal username to help protect your identity. For your safety, choose a nickname that leaves out your real name and a photo that keeps your identity private. Either username works at sign-in.</p>
+        <label class="field-label" for="tutorialNickname">Try a nickname to preview your two names</label>
+        <input class="auth-input" id="tutorialNickname" type="text" maxlength="24" autocomplete="off" placeholder="CloudSketch">
+        <dl class="tutorial-preview">
+          <div><dt>World Chat</dt><dd id="tutorialWorldPreview"></dd></div>
+          <div><dt>DMs and groups</dt><dd id="tutorialPrivatePreview"></dd></div>
+        </dl>
+      </section>
+      <section data-tutorial-step hidden>
+        <h2 tabindex="-1">Find your account controls</h2>
+        <ul class="tutorial-settings">
+          <li><strong>Notifications</strong> turns alerts for new messages on or off. Use Mute in a chat to silence that conversation.</li>
+          <li><strong>Dark mode</strong> switches the app between light and dark.</li>
+          <li><strong>Log out</strong> signs you out on this device.</li>
+          <li><strong>Delete User</strong> permanently deletes your account after you confirm and enter your password.</li>
+        </ul>
+      </section>
+      <section data-tutorial-step hidden>
+        <h2 tabindex="-1">Start a direct message</h2>
+        <p>A DM is a one-on-one conversation. Open <strong>DMs</strong>, use <strong>Start a conversation</strong> to search for someone’s Private Username or their animal username if they haven’t set one, then choose their name and send a message.</p>
+        <label class="field-label" for="tutorialDmSearch">Practice by searching for MoonMoth</label>
+        <input class="auth-input" id="tutorialDmSearch" type="search" autocomplete="off" placeholder="MoonMoth">
+        <button class="settings-toggle" id="tutorialDmResult" type="button" hidden>MoonMoth · Open conversation</button>
+        <p id="tutorialDmFeedback" role="status"></p>
+      </section>
+      <section data-tutorial-step hidden>
+        <h2 tabindex="-1">Create a group chat</h2>
+        <p>Groups let several people chat together. In <strong>DMs</strong>, choose <strong>New group</strong>, name it, then search for and add at least two other people. Check <strong>Selected members</strong> before you tap <strong>Create group chat</strong>. Once it’s created, use <strong>Manage group</strong> to see who’s in it.</p>
+        <p><strong>Practice by choosing two people for a group.</strong></p>
+        <div class="tutorial-actions">
+          <button class="settings-toggle" type="button" data-practice-member="MoonMoth" aria-pressed="false">Add MoonMoth</button>
+          <button class="settings-toggle" type="button" data-practice-member="SkyFern" aria-pressed="false">Add SkyFern</button>
+        </div>
+        <p id="tutorialGroupFeedback" role="status">0 selected</p>
+        <button class="settings-toggle" id="tutorialPracticeCreate" type="button" disabled>Create practice group</button>
+      </section>
+      <p class="composer-error" id="tutorialError" role="alert" hidden></p>
+      <div class="tutorial-actions tutorial-footer">
+        <button class="settings-toggle" id="tutorialSkip" type="button">Skip tour</button>
+        <button class="settings-toggle" id="tutorialBack" type="button">Back</button>
+        <button class="settings-toggle tutorial-next" id="tutorialNext" type="button">Next</button>
+      </div>
+    </dialog>
     <dialog class="delete-user-dialog" id="deleteUserDialog" aria-labelledby="deleteUserTitle">
       <h2 id="deleteUserTitle">Delete User</h2>
       <div id="deleteUserConfirm">
@@ -321,7 +387,8 @@
         <button class="login-submit" id="versionNotesAction" type="button">Got it</button>
       </section>
     </div>
-    <footer class="app-footer">v1.13.2</footer>
+    <div class="mobile-keyboard" id="mobileKeyboard" role="group" aria-label="Pigin keyboard" hidden></div>
+    <footer class="app-footer">v1.14.0</footer>
   </div>
   <div class="app-loading" id="appLoading" role="status" aria-label="Loading PIGIN">
     <div class="loading-indicator">

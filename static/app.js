@@ -17,9 +17,14 @@ const accountCreatedNotice = document.querySelector("#accountCreatedNotice");
 const authSubmit = document.querySelector("#authSubmit");
 const warningScreen = document.querySelector("#warningScreen");
 const versionNotesScreen = document.querySelector("#versionNotesScreen");
-const APP_VERSION = "1.13.2";
+const APP_VERSION = "1.14.0";
+const TUTORIAL_VERSION = 1;
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
+  "1.14.0": [
+    "A guided tour introduces World Chat, Private Usernames, and private conversations.",
+    "The new group form keeps your selected members visible as you search.",
+  ],
   "1.13.2": [
     "The mobile keyboard types as soon as you touch a key and keeps up with overlapping taps.",
     "Taps in the gaps between keys register on the nearest typing key.",
@@ -137,7 +142,7 @@ let groupMessageCursor = 0;
 let dmPollSince = "";
 let dmContactsSnapshot = "";
 let dmGroupsSnapshot = "";
-let groupSearchPeople = [];
+let groupSearchRequest = 0;
 const selectedGroupMembers = new Map();
 let groupSearchTimer = 0;
 let groupManageSearchTimer = 0;
@@ -454,7 +459,7 @@ function setAuthMode(mode) {
   confirmInput.required = !signingIn;
   passwordInput.autocomplete = signingIn ? "current-password" : "new-password";
   document.querySelector("#loginCopy").textContent = signingIn
-    ? "Sign in with your animal username or display name, and password."
+    ? "Sign in with your animal username or Private Username, and password."
     : "Create an account with a password. We’ll give you an animal name.";
   document.querySelector("#authSubmit").textContent = signingIn ? "Sign in" : "Create account";
   authError.hidden = true;
@@ -471,6 +476,7 @@ function showLogin() {
   realtimeSetupFor = null;
   realtimeReadyTopics = new Set();
   currentUser = null;
+  tutorialDialog.close();
   mutedChatKeys = new Set();
   notificationPreferencesReady = false;
   messageCursor = 0;
@@ -487,12 +493,7 @@ function showLogin() {
   dmGroupContacts.replaceChildren();
   dmContactsSnapshot = "";
   dmGroupsSnapshot = "";
-  selectedGroupMembers.clear();
-  groupSearchPeople = [];
-  document.querySelector("#groupCreatePanel").reset();
-  document.querySelector("#groupCreatePanel").hidden = true;
-  document.querySelector("#newGroupButton").setAttribute("aria-expanded", "false");
-  document.querySelector("#groupMemberResults").replaceChildren();
+  resetGroupCreation();
   document.querySelector("#groupManagement").hidden = true;
   document.querySelector("#groupManageToggle").hidden = true;
   document.querySelector("#groupManageToggle").setAttribute("aria-expanded", "false");
@@ -526,7 +527,7 @@ function showLogin() {
 }
 
 function showAccountCreated(username) {
-  accountCreatedNotice.textContent = `Account created. Your animal username is ${username}. Set a display name anytime in Settings.`;
+  accountCreatedNotice.textContent = `Account created. Your animal username is ${username}. Set a Private Username anytime in Settings.`;
   accountCreatedNotice.hidden = false;
   clearTimeout(accountCreatedTimeout);
   accountCreatedTimeout = setTimeout(() => {
@@ -652,7 +653,7 @@ function refreshProfileSettings() {
 
 function applyCurrentUser(user) {
   currentUser = user;
-  document.querySelector("#animalName").textContent = publicNameFor(user);
+  document.querySelector("#animalName").textContent = activeView === "chat" ? user.username : publicNameFor(user);
   refreshProfileSettings();
 }
 
@@ -689,11 +690,10 @@ function showRoom(user) {
   adminTab.classList.remove("active");
   adminTab.setAttribute("aria-pressed", "false");
   updateRoomTitle("chat");
+  document.querySelector("#animalName").textContent = user.username;
   startPolling();
   if (user.warning_count) {
     showWarning("message", `${user.warning_count === 1 ? "An admin deleted one of your messages" : `An admin deleted ${user.warning_count} of your messages`}. Deleted messages remain in the chat as [DELETED].`);
-  } else {
-    maybeShowVersionNotes();
   }
   if (isAdmin) loadAdminData();
   pendingDmPartnerId = readDmDeepLink();
@@ -702,12 +702,14 @@ function showRoom(user) {
   loadNotificationPreferences();
   if (pendingDmPartnerId || pendingDmGroupId) setRoomView("dms");
   applyRememberedShare();
+  showWelcome();
 }
 
 function showWarning(kind, message) {
   if (warningKind === "account") return;
   if (warningKind === "message" && kind !== "account") return;
   warningKind = kind;
+  tutorialDialog.close();
   versionNotesScreen.hidden = true;
   document.querySelector("#warningTitle").textContent = kind === "account" ? "Account deleted" : "Message deleted";
   warningText.textContent = message;
@@ -715,6 +717,129 @@ function showWarning(kind, message) {
   warningScreen.hidden = false;
   warningAction.focus();
 }
+
+const tutorialDialog = document.querySelector("#tutorialDialog");
+const tutorialSteps = [...tutorialDialog.querySelectorAll("[data-tutorial-step]")];
+const tutorialNext = document.querySelector("#tutorialNext");
+const tutorialBack = document.querySelector("#tutorialBack");
+const tutorialSkip = document.querySelector("#tutorialSkip");
+const tutorialError = document.querySelector("#tutorialError");
+const tutorialNickname = document.querySelector("#tutorialNickname");
+const tutorialDmSearch = document.querySelector("#tutorialDmSearch");
+const tutorialDmResult = document.querySelector("#tutorialDmResult");
+const tutorialDmFeedback = document.querySelector("#tutorialDmFeedback");
+const tutorialPracticeMembers = [...tutorialDialog.querySelectorAll("[data-practice-member]")];
+const tutorialPracticeCreate = document.querySelector("#tutorialPracticeCreate");
+const tutorialGroupFeedback = document.querySelector("#tutorialGroupFeedback");
+let tutorialStep = 0;
+
+function showTutorialStep(step) {
+  tutorialStep = step;
+  tutorialSteps.forEach((section, index) => { section.hidden = index !== step; });
+  document.querySelector("#tutorialProgress").textContent = `Step ${step + 1} of ${tutorialSteps.length}`;
+  tutorialBack.hidden = step === 0;
+  tutorialNext.textContent = step === tutorialSteps.length - 1 ? "Finish tour" : "Next";
+  tutorialSteps[step].querySelector("h2").focus();
+}
+
+function updateTutorialNickname() {
+  document.querySelector("#tutorialPrivatePreview").textContent = tutorialNickname.value.trim() || currentUser.username;
+}
+
+function updateTutorialGroup() {
+  const count = tutorialPracticeMembers.filter(button => button.getAttribute("aria-pressed") === "true").length;
+  tutorialGroupFeedback.textContent = `${count} selected`;
+  tutorialPracticeCreate.disabled = count < 2;
+}
+
+function showWelcome() {
+  if (!currentUser || warningKind) return;
+  if (currentUser.tutorial_version >= TUTORIAL_VERSION) {
+    maybeShowVersionNotes();
+    return;
+  }
+  if (tutorialDialog.open) return;
+  document.querySelector("#tutorialAnimalName").textContent = currentUser.username;
+  document.querySelector("#tutorialWorldPreview").textContent = currentUser.username;
+  document.querySelector("#tutorialPrivacyFeedback").textContent = "";
+  tutorialNickname.value = "";
+  updateTutorialNickname();
+  tutorialDmSearch.value = "";
+  tutorialDmResult.hidden = true;
+  tutorialDmFeedback.textContent = "";
+  for (const button of tutorialPracticeMembers) {
+    button.setAttribute("aria-pressed", "false");
+    button.textContent = `Add ${button.dataset.practiceMember}`;
+  }
+  updateTutorialGroup();
+  tutorialError.hidden = true;
+  tutorialDialog.showModal();
+  showTutorialStep(0);
+}
+
+async function completeTutorial() {
+  if (tutorialNext.disabled || !currentUser) return;
+  const accountId = currentUser.id;
+  tutorialSkip.disabled = tutorialBack.disabled = tutorialNext.disabled = true;
+  tutorialError.hidden = true;
+  try {
+    const data = await api("/api/tutorial/complete", { method: "POST" });
+    if (currentUser?.id !== accountId) return;
+    currentUser.tutorial_version = data.tutorial_version;
+    tutorialDialog.close();
+    maybeShowVersionNotes();
+  } catch (error) {
+    if (currentUser?.id !== accountId) return;
+    if (error.accountDeleted) {
+      showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
+    } else if (error.status === 401) {
+      showLogin();
+    } else {
+      tutorialError.textContent = "Could not save your tutorial progress. Please try again.";
+      tutorialError.hidden = false;
+    }
+  } finally {
+    tutorialSkip.disabled = tutorialBack.disabled = tutorialNext.disabled = false;
+  }
+}
+
+tutorialDialog.addEventListener("cancel", event => {
+  event.preventDefault();
+  tutorialSkip.focus();
+});
+tutorialNext.addEventListener("click", () => {
+  if (tutorialStep === tutorialSteps.length - 1) completeTutorial();
+  else showTutorialStep(tutorialStep + 1);
+});
+tutorialBack.addEventListener("click", () => showTutorialStep(tutorialStep - 1));
+tutorialSkip.addEventListener("click", completeTutorial);
+tutorialNickname.addEventListener("input", updateTutorialNickname);
+for (const button of tutorialDialog.querySelectorAll("[data-privacy-answer]")) {
+  button.addEventListener("click", () => {
+    document.querySelector("#tutorialPrivacyFeedback").textContent = button.dataset.privacyAnswer === "animal"
+      ? `Right! World Chat shows ${currentUser.username}.`
+      : "Try again. Your Private Username is used in DMs and groups.";
+  });
+}
+tutorialDmSearch.addEventListener("input", () => {
+  const query = tutorialDmSearch.value.trim().toLowerCase();
+  tutorialDmResult.hidden = !query || !"moonmoth".startsWith(query);
+  tutorialDmFeedback.textContent = query && tutorialDmResult.hidden ? "No practice results. Try MoonMoth." : "";
+});
+tutorialDmResult.addEventListener("click", () => {
+  tutorialDmFeedback.textContent = "Practice conversation opened. In a real DM, write your message and tap Send.";
+});
+for (const button of tutorialPracticeMembers) {
+  button.addEventListener("click", () => {
+    const added = button.getAttribute("aria-pressed") !== "true";
+    button.setAttribute("aria-pressed", String(added));
+    button.textContent = `${added ? "Remove" : "Add"} ${button.dataset.practiceMember}`;
+    updateTutorialGroup();
+  });
+}
+tutorialPracticeCreate.addEventListener("click", () => {
+  tutorialGroupFeedback.textContent = "Practice group created with you, MoonMoth, and SkyFern.";
+});
 
 function hasSeenCurrentVersionNotes() {
   try {
@@ -1436,7 +1561,7 @@ function renderDmSearchResults(people, query) {
   if (!people.length) {
     const empty = document.createElement("p");
     empty.className = "dm-search-empty";
-    empty.textContent = `No one matched “${query}”. Try a display name, or an animal name if they haven’t set one.`;
+    empty.textContent = `No one matched “${query}”. Try a Private Username, or an animal name if they haven’t set one.`;
     results.append(empty);
     return;
   }
@@ -1457,7 +1582,6 @@ let dmSearchTimer = 0;
 function renderGroupMemberResults(people, query) {
   const results = document.querySelector("#groupMemberResults");
   results.replaceChildren();
-  if (!query) return;
   if (!people.length) {
     const empty = document.createElement("p");
     empty.className = "dm-search-empty";
@@ -1466,19 +1590,45 @@ function renderGroupMemberResults(people, query) {
     return;
   }
   for (const person of people) {
-    const selected = selectedGroupMembers.has(person.id);
     const button = createDmPersonButton(person, {
-      preview: selected ? "Added to group" : "Tap to add",
-      active: selected,
       onClick: () => {
         if (selectedGroupMembers.has(person.id)) selectedGroupMembers.delete(person.id);
         else selectedGroupMembers.set(person.id, person);
-        renderGroupMemberResults(groupSearchPeople, query);
-        updateGroupCreateButton();
+        renderGroupSelection();
       },
     });
     results.append(button);
   }
+  renderGroupSelection();
+}
+
+function renderGroupSelection() {
+  const selected = document.querySelector("#groupSelectedMembers");
+  selected.replaceChildren();
+  for (const person of selectedGroupMembers.values()) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "group-selection-remove";
+    remove.textContent = `${person.username} ×`;
+    remove.setAttribute("aria-label", `Remove ${person.username} from selected members`);
+    remove.addEventListener("click", () => {
+      selectedGroupMembers.delete(person.id);
+      renderGroupSelection();
+      (selected.firstElementChild || document.querySelector("#groupMemberSearch")).focus();
+    });
+    selected.append(remove);
+  }
+  for (const result of document.querySelectorAll("#groupMemberResults button")) {
+    const added = selectedGroupMembers.has(Number(result.dataset.accountId));
+    result.classList.toggle("active", added);
+    result.setAttribute("aria-pressed", String(added));
+    result.querySelector(".dm-contact-preview").textContent = added ? "✓ Added · select to remove" : "+ Add to group";
+  }
+  const count = selectedGroupMembers.size;
+  document.querySelector("#groupSelectionCount").textContent = count < 2
+    ? `${count} selected · Add ${2 - count} more`
+    : `${count} selected · ${count + 1} members including you`;
+  updateGroupCreateButton();
 }
 
 function updateGroupCreateButton() {
@@ -1486,19 +1636,28 @@ function updateGroupCreateButton() {
     selectedGroupMembers.size < 2 || !document.querySelector("#groupNameInput").value.trim();
 }
 
-async function searchGroupMembers(query) {
-  const trimmed = query.trim();
-  const results = document.querySelector("#groupMemberResults");
-  if (!trimmed) {
-    groupSearchPeople = [];
-    results.replaceChildren();
-    return;
-  }
+function resetGroupCreation() {
+  clearTimeout(groupSearchTimer);
+  groupSearchRequest += 1;
+  selectedGroupMembers.clear();
+  const form = document.querySelector("#groupCreatePanel");
+  form.reset();
+  form.hidden = true;
+  form.querySelector("fieldset").disabled = false;
+  const button = document.querySelector("#newGroupButton");
+  button.setAttribute("aria-expanded", "false");
+  button.textContent = "New group";
+  document.querySelector("#groupMemberResults").replaceChildren();
+  document.querySelector("#groupCreateError").hidden = true;
+  renderGroupSelection();
+}
+
+async function searchGroupMembers(query, requestId) {
   try {
-    const data = await api(`/api/dms/search?q=${encodeURIComponent(trimmed)}`);
-    groupSearchPeople = data.results || [];
-    renderGroupMemberResults(groupSearchPeople, trimmed);
+    const data = await api(`/api/dms/search?q=${encodeURIComponent(query)}`);
+    if (requestId === groupSearchRequest) renderGroupMemberResults(data.results || [], query);
   } catch (error) {
+    if (requestId !== groupSearchRequest) return;
     if (error.accountDeleted) {
       showWarning("account", "Your account was deleted by an admin. Sign out to return to the sign-in screen.");
     } else if (error.status === 401) {
@@ -2422,6 +2581,9 @@ function setRoomView(view) {
   if (activeView !== view) hideMobileKeyboard();
   activeView = view;
   updateRoomTitle(view);
+  if (currentUser) {
+    document.querySelector("#animalName").textContent = view === "chat" ? currentUser.username : publicNameFor(currentUser);
+  }
   const showChat = view === "chat";
   const showDms = view === "dms";
   const showSettings = view === "settings";
@@ -2536,7 +2698,7 @@ document.querySelector("#newGroupButton").addEventListener("click", event => {
   const panel = document.querySelector("#groupCreatePanel");
   panel.hidden = !panel.hidden;
   event.currentTarget.setAttribute("aria-expanded", String(!panel.hidden));
-  document.querySelector("#groupCreateError").hidden = true;
+  event.currentTarget.textContent = panel.hidden ? "New group" : "Close group form";
   if (!panel.hidden) document.querySelector("#groupNameInput").focus();
 });
 document.querySelector("#groupManageToggle").addEventListener("click", event => {
@@ -2579,14 +2741,20 @@ document.querySelector("#groupAddMemberSearch").addEventListener("input", event 
 document.querySelector("#groupNameInput").addEventListener("input", updateGroupCreateButton);
 document.querySelector("#groupMemberSearch").addEventListener("input", event => {
   clearTimeout(groupSearchTimer);
-  const query = event.target.value;
-  groupSearchTimer = window.setTimeout(() => searchGroupMembers(query), 200);
+  const requestId = ++groupSearchRequest;
+  const query = event.target.value.trim();
+  document.querySelector("#groupMemberResults").replaceChildren();
+  document.querySelector("#groupCreateError").hidden = true;
+  if (query) groupSearchTimer = window.setTimeout(() => searchGroupMembers(query, requestId), 200);
 });
 document.querySelector("#groupCreatePanel").addEventListener("submit", async event => {
   event.preventDefault();
   const submit = document.querySelector("#createGroupSubmit");
-  if (submit.disabled) return;
-  submit.disabled = true;
+  const fields = event.currentTarget.querySelector("fieldset");
+  if (submit.disabled || fields.disabled) return;
+  fields.disabled = true;
+  const accountId = currentUser.id;
+  const selectedMembers = [...selectedGroupMembers.values()];
   const error = document.querySelector("#groupCreateError");
   error.hidden = true;
   try {
@@ -2594,10 +2762,10 @@ document.querySelector("#groupCreatePanel").addEventListener("submit", async eve
       method: "POST",
       body: JSON.stringify({
         name: document.querySelector("#groupNameInput").value,
-        member_ids: [...selectedGroupMembers.keys()],
+        member_ids: selectedMembers.map(person => person.id),
       }),
     });
-    const selectedMembers = [...selectedGroupMembers.values()];
+    if (currentUser?.id !== accountId) return;
     const members = [
       publicNameFor(currentUser),
       ...selectedMembers.map(person => person.username),
@@ -2606,12 +2774,7 @@ document.querySelector("#groupCreatePanel").addEventListener("submit", async eve
       { id: currentUser.id, name: publicNameFor(currentUser) },
       ...selectedMembers.map(person => ({ id: person.id, name: person.username })),
     ];
-    document.querySelector("#groupCreatePanel").reset();
-    selectedGroupMembers.clear();
-    groupSearchPeople = [];
-    document.querySelector("#groupMemberResults").replaceChildren();
-    document.querySelector("#groupCreatePanel").hidden = true;
-    document.querySelector("#newGroupButton").setAttribute("aria-expanded", "false");
+    resetGroupCreation();
     const created = {
       id: result.id,
       name: result.name,
@@ -2629,10 +2792,15 @@ document.querySelector("#groupCreatePanel").addEventListener("submit", async eve
     selectDmGroup(created);
     loadDmGroups();
   } catch (requestError) {
-    error.textContent = requestError.message;
-    error.hidden = false;
+    if (currentUser?.id === accountId) {
+      error.textContent = requestError.message;
+      error.hidden = false;
+    }
   } finally {
-    updateGroupCreateButton();
+    if (currentUser?.id === accountId) {
+      fields.disabled = false;
+      updateGroupCreateButton();
+    }
   }
 });
 document.querySelector("#dmSearchForm").addEventListener("submit", event => {
@@ -2664,7 +2832,7 @@ warningAction.addEventListener("click", async () => {
     currentUser.warning_count = 0;
     warningKind = null;
     warningScreen.hidden = true;
-    maybeShowVersionNotes();
+    showWelcome();
   } catch (error) {
     showWarning("account", error.message);
   }
@@ -3384,11 +3552,7 @@ let physicalKeyboardUsed = false;
 function usesMobileKeyboard() {
   return mobileDevice && mobileComposer.matches && !physicalKeyboardUsed;
 }
-const mobileKeyboard = document.createElement("div");
-mobileKeyboard.className = "mobile-keyboard";
-mobileKeyboard.setAttribute("role", "group");
-mobileKeyboard.setAttribute("aria-label", "Pigin keyboard");
-mobileKeyboard.hidden = true;
+const mobileKeyboard = document.getElementById("mobileKeyboard");
 const keyboardFeeds = new Map([[messageInput, feed], [dmMessageInput, dmFeed]]);
 const keyboardLetters = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 const keyboardSymbols = ["1234567890", "-/:;()$&@\"", ".,?!'"];
@@ -3514,7 +3678,6 @@ function showMobileKeyboard(input) {
   keyboardStatus.hidden = true;
   keyboardMode = "letters";
   renderMobileKeyboard();
-  input.form.after(mobileKeyboard);
   input.after(keyboardCaret);
   caretResizeObserver.observe(input.form);
   caretResizeObserver.observe(input);
@@ -3561,7 +3724,7 @@ function renderMobileKeyboard() {
   ]);
   if (characterKeys) keys.push([
     [keyboardMode === "letters" ? "123" : "ABC", "mode", "", "Switch letters and symbols"],
-    ["☺", "emoji", "", "Choose an emoji"],
+    ["", "emoji", "", "Choose an emoji"],
     ["space", "insert", " "],
     ["return", "insert", "\n", "New line"],
   ]);
@@ -3575,6 +3738,9 @@ function renderMobileKeyboard() {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
+      if (action === "emoji") {
+        button.append(keyboardInput.form.querySelector(".emoji-button svg").cloneNode(true));
+      }
       button.dataset.action = action;
       button.dataset.value = value;
       if (accessibleLabel) button.setAttribute("aria-label", accessibleLabel);

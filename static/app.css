@@ -103,11 +103,12 @@ body {
 button, input, textarea { font: inherit; }
 [hidden] { display: none !important; }
 .shell {
+  --shell-gutter: 20px;
   width: min(1100px, 100%);
   height: 100%;
   min-height: 0;
   margin: auto;
-  padding: 0 20px;
+  padding-inline: var(--shell-gutter);
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
@@ -528,8 +529,8 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
   font-size: 18px;
   line-height: 1;
 }
-.emoji-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
-.emoji-button .smile-eye { fill: currentColor; stroke: none; }
+:is(.emoji-button, .mobile-keyboard button[data-action="emoji"]) svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+:is(.emoji-button, .mobile-keyboard button[data-action="emoji"]) .smile-eye { fill: currentColor; stroke: none; }
 .emoji-button:hover:not(:disabled) { background: var(--quote); color: var(--ink); }
 .emoji-button:disabled { cursor: default; opacity: .42; }
 .emoji-picker {
@@ -624,7 +625,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 }
 @keyframes arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 900px) {
-  .shell { padding: 0 12px; }
+  .shell { --shell-gutter: 12px; }
   h1 { font-size: 24px; }
   .room-heading { padding: max(8px, env(safe-area-inset-top)) 0 8px; }
   .room-heading h1 { font-size: 17px; }
@@ -723,15 +724,22 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .delete-user-dialog .auth-input { width: 100%; box-sizing: border-box; margin-top: 10px; }
 .delete-user-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 
+.shell:has(> .mobile-keyboard:not([hidden])) {
+  width: 100%;
+  padding-inline: 0;
+}
+.shell:has(> .mobile-keyboard:not([hidden])) > .room {
+  width: min(1100px, 100%);
+  margin-inline: auto;
+  padding-inline: var(--shell-gutter);
+}
+.shell:has(> .mobile-keyboard:not([hidden])) .composer-wrap { padding-bottom: 8px; }
+.mobile-keyboard:not([hidden]) + .app-footer { display: none; }
 .mobile-keyboard {
   display: grid;
-  gap: 4px;
-  width: min(100%, 560px);
-  margin: 6px auto 0;
-  padding: 5px;
-  padding-bottom: max(5px, env(safe-area-inset-bottom));
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  gap: 6px;
+  padding: 6px max(4px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+  border-top: 1px solid var(--line);
   background: var(--surface);
   touch-action: manipulation;
   user-select: none;
@@ -741,21 +749,22 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .mobile-keyboard-row button {
   flex: 1 1 0;
   min-width: 0;
-  height: clamp(24px, 7dvh, 44px);
+  height: clamp(24px, 8dvh, 60px);
   padding: 0;
   border: 1px solid var(--field-border);
   border-radius: 5px;
   background: var(--paper);
   color: var(--ink);
-  font-size: 16px;
+  font-size: 20px;
   cursor: pointer;
 }
 .mobile-keyboard[data-layout="letters"] .mobile-keyboard-row:nth-child(3) { padding-inline: 5%; }
 .mobile-keyboard[data-layout="letters"] button:is([data-action="shift"], [data-action="delete"]) { flex-grow: 1.5; }
 .mobile-keyboard-row.mobile-keyboard-tools { justify-content: space-between; }
-.mobile-keyboard-tools button { flex: 0 0 auto; min-width: 44px; height: 26px; }
+.mobile-keyboard-tools button { flex: 0 0 auto; min-width: 48px; height: clamp(26px, 5dvh, 38px); }
 .mobile-keyboard-tools button,
 .mobile-keyboard-bottom button { font-size: 14px; }
+.mobile-keyboard button[data-action="emoji"] { display: grid; place-items: center; }
 .mobile-keyboard-bottom .mobile-keyboard-space { flex-grow: 4; }
 .mobile-keyboard-bottom .mobile-keyboard-return { flex-grow: 1.6; }
 .mobile-keyboard-row button:is([data-action="shift"], [data-action="delete"], [data-action="mode"], [data-action="more"], [data-action="emoji"]) {
@@ -794,4 +803,119 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 @keyframes composer-caret-blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .mobile-composer-caret span::after { animation: none; }
+}
+
+.group-create-panel fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.group-selection {
+  padding: 10px;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.group-selection p {
+  margin: 4px 0 0;
+  color: var(--label);
+}
+
+.group-selection-list,
+.tutorial-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.group-selection-list:not(:empty) {
+  margin-top: 8px;
+}
+
+.group-selection-remove {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 5px 9px;
+  border: 1px solid var(--field-line);
+  border-radius: 20px;
+  background: var(--active);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tutorial-dialog {
+  width: min(480px, calc(100% - 24px));
+  max-height: 85dvh;
+  overflow-y: auto;
+}
+
+.tutorial-dialog .tutorial-progress {
+  margin: 0 0 10px;
+  color: var(--label);
+  font-weight: 700;
+}
+
+.tutorial-dialog h2 {
+  margin-bottom: 10px;
+}
+
+.tutorial-dialog h2:focus {
+  outline: none;
+}
+
+.tutorial-dialog .auth-input {
+  margin: 5px 0 10px;
+}
+
+.tutorial-settings {
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.tutorial-settings li + li {
+  margin-top: 8px;
+}
+
+.tutorial-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.tutorial-preview div {
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--active);
+  overflow-wrap: anywhere;
+}
+
+.tutorial-preview dt {
+  color: var(--label);
+  font-size: 12px;
+}
+
+.tutorial-preview dd {
+  margin: 2px 0 0;
+  font-weight: 700;
+}
+
+.tutorial-footer {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.tutorial-next {
+  margin-left: auto;
+  background: var(--green);
+  color: var(--on-green);
 }

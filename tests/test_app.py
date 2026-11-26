@@ -34,7 +34,7 @@ class ChatroomTests(unittest.TestCase):
         page = self.client.get("/")
         script = self.client.get("/static/app.js")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"v1.13.2", page.data)
+        self.assertIn(b"v1.14.0", page.data)
         self.assertIn(b"id=\"versionNotesScreen\"", page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
@@ -54,7 +54,7 @@ class ChatroomTests(unittest.TestCase):
         self.assertIn(b"id=\"worldDndToggle\"", page.data)
         self.assertIn(b"id=\"conversationDndToggle\"", page.data)
         self.assertIn(b"id=\"themeToggle\"", page.data)
-        self.assertIn(b'APP_VERSION = "1.13.2"', script.data)
+        self.assertIn(b'APP_VERSION = "1.14.0"', script.data)
         self.assertIn(b"Couldn't send, inappropriate language", script.data)
         self.assertIn(b"promotePendingMessage", script.data)
         self.assertIn(b"createMessageActions", script.data)
@@ -120,6 +120,36 @@ class ChatroomTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201, response.json)
         return response.json["user"], response.json["csrf_token"]
+
+    def test_tutorial_completion_is_saved_per_account(self):
+        user, token = self.create_account()
+        other_client = self.app.test_client()
+        self.create_account(other_client)
+        self.assertEqual(user["tutorial_version"], 0)
+
+        for _ in range(2):
+            response = self.client.post(
+                "/api/tutorial/complete",
+                headers={"X-CSRF-Token": token},
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json["tutorial_version"], 1)
+        self.assertEqual(other_client.get("/api/session").json["user"]["tutorial_version"], 0)
+
+        fresh_client = self.app.test_client()
+        token = fresh_client.get("/api/session").json["csrf_token"]
+        response = fresh_client.post(
+            "/api/auth",
+            json={
+                "mode": "signin",
+                "username": user["username"],
+                "password": "correct-horse-battery",
+            },
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["user"]["tutorial_version"], 1)
+        self.assertEqual(fresh_client.get("/api/session").json["user"]["tutorial_version"], 1)
 
     def create_admin(self):
         result = self.app.test_cli_runner().invoke(

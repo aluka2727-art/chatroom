@@ -154,6 +154,7 @@ POSTGRES_STATEMENTS = (
     "CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_ci ON accounts (lower(username))",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS display_name TEXT",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS avatar_ext TEXT",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS tutorial_version INTEGER NOT NULL DEFAULT 0",
     """
     CREATE UNIQUE INDEX IF NOT EXISTS accounts_display_name_ci
         ON accounts (lower(display_name))
@@ -484,8 +485,8 @@ def copy_sqlite_to_postgres(connection, sqlite_path):
         for row in accounts:
             connection.execute(
                 """
-                INSERT INTO accounts (id, username, password_hash, role, display_name, avatar_ext, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO accounts (id, username, password_hash, role, display_name, avatar_ext, created_at, tutorial_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row["id"],
@@ -495,6 +496,7 @@ def copy_sqlite_to_postgres(connection, sqlite_path):
                     row["display_name"] if "display_name" in account_columns else None,
                     row["avatar_ext"] if "avatar_ext" in account_columns else None,
                     row["created_at"],
+                    row["tutorial_version"] if "tutorial_version" in account_columns else 0,
                 ),
             )
         deleted_columns = {row["name"] for row in source.execute("PRAGMA table_info(deleted_accounts)")}

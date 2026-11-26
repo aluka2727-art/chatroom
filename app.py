@@ -286,6 +286,7 @@ def serialize_account(account, warning_count=0):
         "avatar_url": avatar_url_for(account["id"], avatar_ext),
         "role": account["role"],
         "warning_count": warning_count,
+        "tutorial_version": mapping_get(account, "tutorial_version", 0),
     }
 
 
@@ -593,6 +594,8 @@ def create_app(test_config=None):
         }
         if "display_name" not in account_columns:
             database.execute("ALTER TABLE accounts ADD COLUMN display_name TEXT")
+        if "tutorial_version" not in account_columns:
+            database.execute("ALTER TABLE accounts ADD COLUMN tutorial_version INTEGER NOT NULL DEFAULT 0")
         if "avatar_ext" not in account_columns:
             database.execute("ALTER TABLE accounts ADD COLUMN avatar_ext TEXT")
         database.execute(
@@ -746,7 +749,7 @@ def create_app(test_config=None):
         if not isinstance(account_id, int):
             return None
         return get_db().execute(
-            "SELECT id, username, role, display_name, avatar_ext FROM accounts WHERE id = ?",
+            "SELECT id, username, role, display_name, avatar_ext, tutorial_version FROM accounts WHERE id = ?",
             (account_id,),
         ).fetchone()
 
@@ -1289,6 +1292,17 @@ def create_app(test_config=None):
     def api_logout():
         session.clear()
         return jsonify(ok=True)
+
+    @app.post("/api/tutorial/complete")
+    @login_required
+    def api_complete_tutorial():
+        database = get_db()
+        database.execute(
+            "UPDATE accounts SET tutorial_version = 1 WHERE id = ? AND tutorial_version < 1",
+            (g.account["id"],),
+        )
+        database.commit()
+        return jsonify(tutorial_version=1)
 
     @app.post("/api/warnings/acknowledge")
     @login_required
