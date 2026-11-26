@@ -21,7 +21,8 @@ const APP_VERSION = "1.14.1";
 const VERSION_NOTES_STORAGE_KEY = "pigin-seen-version";
 const VERSION_NOTES = {
   "1.14.1": [
-    "The mobile keyboard is shorter, with less space between rows.",
+    "The optimized keyboard has medium-height keys and a simpler layout.",
+    "The illustrated install guide shows how to add PIGIN as a web app on your device.",
   ],
   "1.14.0": [
     "A guided tour introduces World Chat, Private Usernames, and private conversations.",
@@ -739,6 +740,40 @@ const tutorialPracticeMembers = [...tutorialDialog.querySelectorAll("[data-pract
 const tutorialPracticeCreate = document.querySelector("#tutorialPracticeCreate");
 const tutorialGroupFeedback = document.querySelector("#tutorialGroupFeedback");
 let tutorialStep = 0;
+let installGuideOnly = false;
+const installGuide = document.querySelector("#installGuide");
+const installGuideDevice = document.querySelector("#installGuideDevice");
+
+function defaultInstallGuide(userAgent, platform, touchPoints) {
+  if (/iPhone|iPad|iPod/i.test(userAgent) || (/Mac/i.test(platform) && touchPoints > 1)) return "ios";
+  if (/Android/i.test(userAgent)) return "android";
+  if (/Edg\//i.test(userAgent)) return "edge";
+  if (/Mac/i.test(platform) && /Safari\//i.test(userAgent) && !/Chrome\//i.test(userAgent)) return "mac";
+  return "chrome";
+}
+
+function renderInstallGuide() {
+  for (const list of installGuide.querySelectorAll("[data-install-device]")) {
+    list.hidden = list.dataset.installDevice !== installGuideDevice.value;
+  }
+}
+
+function resetInstallGuide() {
+  installGuideDevice.value = defaultInstallGuide(navigator.userAgent, navigator.platform, navigator.maxTouchPoints);
+  document.querySelector("#installGuideStandalone").hidden =
+    navigator.standalone !== true && !window.matchMedia("(display-mode: standalone)").matches;
+  renderInstallGuide();
+}
+
+installGuideDevice.addEventListener("change", renderInstallGuide);
+document.querySelector("#openInstallGuide").addEventListener("click", () => {
+  installGuideOnly = true;
+  tutorialSteps = [installGuide];
+  tutorialError.hidden = true;
+  resetInstallGuide();
+  tutorialDialog.showModal();
+  showTutorialStep(0);
+});
 
 function showTutorialStep(step) {
   hideMobileKeyboard();
@@ -746,7 +781,9 @@ function showTutorialStep(step) {
   for (const section of allTutorialSteps) section.hidden = section !== tutorialSteps[step];
   document.querySelector("#tutorialProgress").textContent = `Step ${step + 1} of ${tutorialSteps.length}`;
   tutorialBack.hidden = step === 0;
-  tutorialNext.textContent = step === tutorialSteps.length - 1 ? "Finish tour" : "Next";
+  tutorialSkip.hidden = installGuideOnly;
+  document.querySelector("#tutorialProgress").hidden = installGuideOnly;
+  tutorialNext.textContent = installGuideOnly ? "Done" : step === tutorialSteps.length - 1 ? "Finish tour" : "Next";
   tutorialSteps[step].querySelector("h2").focus();
 }
 
@@ -768,6 +805,8 @@ function showWelcome() {
     return;
   }
   if (tutorialDialog.open) return;
+  installGuideOnly = false;
+  resetInstallGuide();
   tutorialSteps = allTutorialSteps.filter(section => Number(section.dataset.tutorialStep || 1) > completedVersion);
   if (!tutorialSteps.length) return;
   document.querySelector("#tutorialAnimalName").textContent = currentUser.username;
@@ -819,11 +858,13 @@ async function completeTutorial() {
 }
 
 tutorialDialog.addEventListener("cancel", event => {
+  if (installGuideOnly) return;
   event.preventDefault();
   tutorialSkip.focus();
 });
 tutorialNext.addEventListener("click", () => {
-  if (tutorialStep === tutorialSteps.length - 1) completeTutorial();
+  if (installGuideOnly) tutorialDialog.close();
+  else if (tutorialStep === tutorialSteps.length - 1) completeTutorial();
   else showTutorialStep(tutorialStep + 1);
 });
 tutorialBack.addEventListener("click", () => showTutorialStep(tutorialStep - 1));
@@ -1849,7 +1890,6 @@ function selectDmContact(contact) {
   closeMessageMenu();
   dmFeed.replaceChildren();
   dmMessageInput.value = "";
-  keyboardHistory.delete(dmMessageInput);
   dmMessageInput.style.height = "34px";
   dmMessageInput.disabled = false;
   dmMessageInput.placeholder = `Message ${contact.username}...`;
@@ -1889,7 +1929,6 @@ function selectDmGroup(group) {
   showGroupManagementError("");
   dmFeed.replaceChildren();
   dmMessageInput.value = "";
-  keyboardHistory.delete(dmMessageInput);
   dmMessageInput.style.height = "34px";
   dmMessageInput.disabled = false;
   dmMessageInput.placeholder = `Message ${group.name}...`;
@@ -3594,7 +3633,6 @@ const caretResizeObserver = new ResizeObserver(() => {
 });
 const pendingComposerResizes = new Set();
 let keyboardFrame = 0;
-const keyboardHistory = new WeakMap();
 const keyboardStatus = document.createElement("p");
 keyboardStatus.className = "mobile-keyboard-status";
 keyboardStatus.setAttribute("role", "status");
@@ -3604,7 +3642,6 @@ let keyboardInput = null;
 let keyboardShift = false;
 let lastShiftTap = -Infinity;
 let keyboardCaps = false;
-let keyboardSelecting = false;
 let keyboardMode = "letters";
 
 function syncKeyboardCaretStyle() {
@@ -3693,7 +3730,6 @@ function showMobileKeyboard(input) {
   keyboardShift = false;
   lastShiftTap = -Infinity;
   keyboardCaps = false;
-  keyboardSelecting = false;
   keyboardStatus.hidden = true;
   keyboardMode = "letters";
   const targetFeed = keyboardFeeds.get(input);
@@ -3716,7 +3752,6 @@ function showMobileKeyboard(input) {
 
 function hideMobileKeyboard() {
   if (!keyboardInput) return;
-  if (keyboardInput.type === "password") keyboardHistory.delete(keyboardInput);
   keyboardInput = null;
   caretBefore.data = caretAfter.data = "";
   keyboardCaret.hidden = true;
@@ -3730,46 +3765,31 @@ function hideMobileKeyboard() {
 
 function renderMobileKeyboard() {
   const layouts = { letters: keyboardLetters, symbols: keyboardSymbols, more: keyboardMoreSymbols };
-  const characterKeys = layouts[keyboardMode]?.map(row => [...row].map(letter => {
+  const keys = layouts[keyboardMode].map(row => [...row].map(letter => {
     const value = keyboardShift !== keyboardCaps ? letter.toUpperCase() : letter;
     return [value, "insert", value];
   }));
-  if (characterKeys) {
-    const leadingKey = {
-      letters: ["⇧", "shift", "", "Shift"],
-      symbols: ["#+=", "more", "", "More symbols"],
-      more: ["123", "more", "", "Numbers and punctuation"],
-    }[keyboardMode];
-    characterKeys[2].unshift(leadingKey);
-    characterKeys[2].push(["⌫", "delete", "", "Backspace"]);
-  }
-  const keys = characterKeys ?? [
-    [["←", "left", "", "Move left"], ["→", "right", "", "Move right"],
-      ["Home", "home"], ["End", "end"], ["Del", "forwardDelete", "", "Delete forward"]],
-    [["Select", "select"], ["Select all", "all"], ["Copy", "copy"], ["Cut", "cut"], ["Paste", "paste"]],
-    [["Undo", "undo"], ["Redo", "redo"], ["Caps Lock", "caps"]],
-  ];
-  keys.unshift([
-    keyboardMode === "edit" ? ["ABC", "mode", "", "Back to letters"] : ["Edit", "edit", "", "Editing controls"],
-    ["⌄", "hide", "", "Hide keyboard"],
-  ]);
-  if (characterKeys) {
-    const composer = keyboardFeeds.has(keyboardInput);
-    const bottomRow = [[keyboardMode === "letters" ? "123" : "ABC", "mode", "", "Switch letters and symbols"]];
-    if (composer) bottomRow.push(["", "emoji", "", "Choose an emoji"]);
-    bottomRow.push(["space", "insert", " "]);
-    bottomRow.push(composer ? ["return", "insert", "\n", "New line"] : ["Done", "hide"]);
-    keys.push(bottomRow);
-  }
-  if (keyboardInput.type === "password" && keyboardMode === "edit") {
-    keys[2] = keys[2].filter(([, action]) => action !== "copy" && action !== "cut");
-  }
+  const leadingKey = {
+    letters: ["⇧", "shift", "", "Shift"],
+    symbols: ["#+=", "more", "", "More symbols"],
+    more: ["123", "more", "", "Numbers and punctuation"],
+  }[keyboardMode];
+  keys[2].unshift(leadingKey);
+  keys[2].push(["⌫", "delete", "", "Backspace"]);
+
+  const composer = keyboardFeeds.has(keyboardInput);
+  const bottomRow = [[keyboardMode === "letters" ? "123" : "ABC", "mode", "", "Switch letters and symbols"]];
+  if (keyboardMode !== "letters") bottomRow.push(["Paste", "paste"]);
+  else if (composer) bottomRow.push(["", "emoji", "", "Choose an emoji"]);
+  bottomRow.push(["space", "insert", " "]);
+  bottomRow.push(composer ? ["return", "insert", "\n", "New line"] : ["Done", "hide"]);
+  keys.push(bottomRow);
+
   mobileKeyboard.dataset.layout = keyboardMode;
   mobileKeyboard.replaceChildren(...keys.map((row, index) => {
     const element = document.createElement("div");
     element.className = "mobile-keyboard-row";
-    if (index === 0) element.classList.add("mobile-keyboard-tools");
-    if (characterKeys && index === keys.length - 1) element.classList.add("mobile-keyboard-bottom");
+    if (index === keys.length - 1) element.classList.add("mobile-keyboard-bottom");
     for (const [label, action, value, accessibleLabel] of row) {
       const button = document.createElement("button");
       button.type = "button";
@@ -3780,8 +3800,7 @@ function renderMobileKeyboard() {
       button.dataset.action = action;
       button.dataset.value = value;
       if (accessibleLabel) button.setAttribute("aria-label", accessibleLabel);
-      const pressed = { shift: keyboardShift || keyboardCaps, caps: keyboardCaps, select: keyboardSelecting };
-      if (Object.hasOwn(pressed, action)) button.setAttribute("aria-pressed", String(pressed[action]));
+
       if (keyboardMode === "letters" && /^[a-z]$/i.test(value)) {
         button.dataset.letter = value.toLowerCase();
       }
@@ -3807,83 +3826,29 @@ function composerSnapshot(input) {
   return { value: input.value, start: input.selectionStart, end: input.selectionEnd };
 }
 
-function composerHistory(input) {
-  let history = keyboardHistory.get(input);
-  if (history?.value !== input.value) {
-    history = { value: input.value, undo: [], redo: [] };
-    keyboardHistory.set(input, history);
-  }
-  return history;
-}
-
-function applyKeyboardInput(input, history) {
-  history.value = input.value;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-}
-
 function editWithMobileKeyboard(input, action, value = "") {
   const snapshot = composerSnapshot(input);
   let { start, end } = snapshot;
-  if (start === end) {
-    if (action === "delete") start = adjacentCharacter(input.value, start, -1);
-    if (action === "forwardDelete") end = adjacentCharacter(input.value, end, 1);
-  }
+  if (start === end && action === "delete") start = adjacentCharacter(input.value, start, -1);
   if (input.value.slice(start, end) === value) return;
   if (input.maxLength >= 0 && input.value.length - (end - start) + value.length > input.maxLength) return;
-  const history = composerHistory(input);
-  history.undo.push(snapshot);
-  history.redo.length = 0;
   input.setRangeText(value, start, end, "end");
-  applyKeyboardInput(input, history);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-function restoreKeyboardEdit(input, action) {
-  const history = composerHistory(input);
-  const previous = history[action].pop();
-  if (!previous) return;
-  history[action === "undo" ? "redo" : "undo"].push(composerSnapshot(input));
-  input.value = previous.value;
-  input.setSelectionRange(previous.start, previous.end);
-  applyKeyboardInput(input, history);
-}
-
-function moveKeyboardSelection(input, action) {
-  const { value, selectionStart: start, selectionEnd: end, selectionDirection } = input;
-  const backwards = selectionDirection === "backward";
-  const anchor = backwards ? end : start;
-  const cursor = backwards ? start : end;
-  const lineEnd = value.indexOf("\n", cursor);
-  const positions = {
-    left: !keyboardSelecting && start !== end ? start : adjacentCharacter(value, cursor, -1),
-    right: !keyboardSelecting && start !== end ? end : adjacentCharacter(value, cursor, 1),
-    home: cursor === 0 ? 0 : value.lastIndexOf("\n", cursor - 1) + 1,
-    end: lineEnd === -1 ? value.length : lineEnd,
-  };
-  const next = positions[action];
-  const fixed = keyboardSelecting ? anchor : next;
-  input.setSelectionRange(Math.min(fixed, next), Math.max(fixed, next), next < fixed ? "backward" : "forward");
-}
-
-async function keyboardClipboard(input, action) {
+async function pasteWithMobileKeyboard(input) {
   const snapshot = composerSnapshot(input);
-  const selected = snapshot.value.slice(snapshot.start, snapshot.end);
-  if (action !== "paste" && !selected) return;
   keyboardStatus.hidden = true;
   try {
-    let text;
-    if (action === "paste") text = await navigator.clipboard.readText();
-    else await navigator.clipboard.writeText(selected);
+    const text = await navigator.clipboard.readText();
     const current = composerSnapshot(input);
-    if (keyboardInput !== input || current.value !== snapshot.value ||
+    if (keyboardInput !== input || input.matches(":disabled") || current.value !== snapshot.value ||
         current.start !== snapshot.start || current.end !== snapshot.end) return;
-    if (action === "cut") editWithMobileKeyboard(input, "delete");
-    if (action === "paste" && text) {
-      const available = input.maxLength - input.value.length + snapshot.end - snapshot.start;
-      const normalized = input.tagName === "TEXTAREA" ? text.replace(/\r\n?/g, "\n") : text.replace(/[\r\n]/g, "");
-      let clipped = input.maxLength < 0 ? normalized : normalized.slice(0, Math.max(0, available));
-      if (/[\uD800-\uDBFF]$/.test(clipped)) clipped = clipped.slice(0, -1);
-      if (clipped) editWithMobileKeyboard(input, "insert", clipped);
-    }
+    const available = input.maxLength - input.value.length + snapshot.end - snapshot.start;
+    const normalized = input.tagName === "TEXTAREA" ? text.replace(/\r\n?/g, "\n") : text.replace(/[\r\n]/g, "");
+    let clipped = input.maxLength < 0 ? normalized : normalized.slice(0, Math.max(0, available));
+    if (/[\uD800-\uDBFF]$/.test(clipped)) clipped = clipped.slice(0, -1);
+    if (clipped) editWithMobileKeyboard(input, "insert", clipped);
   } catch {
     if (keyboardInput !== input) return;
     keyboardStatus.textContent = "Clipboard access is unavailable.";
@@ -3900,7 +3865,6 @@ for (const input of keyboardFields) {
   input.addEventListener("select", scheduleKeyboardFrame);
   input.addEventListener("scroll", scheduleKeyboardFrame);
   input.form?.addEventListener("submit", () => {
-    keyboardHistory.delete(input);
     pendingComposerResizes.delete(input);
     scheduleKeyboardFrame();
   });
@@ -3911,9 +3875,9 @@ const immediateKeyboardActions = new Set(["insert", "delete", "shift"]);
 const handledKeyboardPresses = new WeakSet();
 function nearestTypingKey(event) {
   if (event.pointerType !== "touch" && event.pointerType !== "pen") return null;
-  if (keyboardMode === "edit" || event.target.closest(".mobile-keyboard-tools, .mobile-keyboard-status")) return null;
+  if (event.target.closest(".mobile-keyboard-status")) return null;
   const { clientX: x, clientY: y } = event;
-  const rows = [...mobileKeyboard.querySelectorAll(".mobile-keyboard-row:not(.mobile-keyboard-tools)")];
+  const rows = [...mobileKeyboard.querySelectorAll(".mobile-keyboard-row")];
   const bounds = rows.map(row => row.getBoundingClientRect());
   // Split the gaps between rows at their midpoints.
   if (!bounds.length || y < bounds[0].top || y > bounds.at(-1).bottom + 5) return null;
@@ -3987,31 +3951,13 @@ function activateMobileKey(button, event) {
       updateKeyboardLetterCase();
       return;
     }
-    case "caps": keyboardCaps = !keyboardCaps; break;
-    case "select": keyboardSelecting = !keyboardSelecting; break;
     case "mode": keyboardMode = keyboardMode === "letters" ? "symbols" : "letters"; break;
     case "more": keyboardMode = keyboardMode === "symbols" ? "more" : "symbols"; break;
-    case "edit": keyboardMode = "edit"; break;
     case "emoji":
       event.stopPropagation();
       keyboardInput.form.querySelector(".emoji-button").click();
       return;
-    case "all":
-      keyboardInput.select();
-      scheduleKeyboardFrame();
-      return;
-    case "copy":
-    case "cut":
-    case "paste": keyboardClipboard(keyboardInput, action); return;
-    case "undo":
-    case "redo": restoreKeyboardEdit(keyboardInput, action); return;
-    case "left":
-    case "right":
-    case "home":
-    case "end":
-      moveKeyboardSelection(keyboardInput, action);
-      scheduleKeyboardFrame();
-      return;
+    case "paste": pasteWithMobileKeyboard(keyboardInput); return;
     default:
       editWithMobileKeyboard(keyboardInput, action, value);
       if (!keyboardShift || !/^[A-Z]$/i.test(value)) return;
@@ -4021,11 +3967,9 @@ function activateMobileKey(button, event) {
       return;
   }
   if (keyboardMode !== "letters") keyboardShift = false;
-  if (keyboardMode !== "edit") keyboardSelecting = false;
   renderMobileKeyboard();
   if (restoreFocus) {
-    const nextAction = action === "edit" ? "all" : action;
-    mobileKeyboard.querySelector(`[data-action="${nextAction}"]`)?.focus({ preventScroll: true });
+    mobileKeyboard.querySelector(`[data-action="${action}"]`)?.focus({ preventScroll: true });
   }
 }
 function dismissKeyboardOutsideInput(event) {

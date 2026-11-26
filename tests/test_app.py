@@ -36,6 +36,9 @@ class ChatroomTests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn(b"v1.14.1", page.data)
         self.assertIn(b"id=\"versionNotesScreen\"", page.data)
+        self.assertIn(b'data-tutorial-step="4"', page.data)
+        for device in (b"ios", b"android", b"mac", b"edge", b"chrome"):
+            self.assertIn(b'data-install-device="' + device + b'"', page.data)
         self.assertIn(b"unread-dot", page.data)
         self.assertIn(b"id=\"menuButton\"", page.data)
         self.assertIn(b"/static/app.js", page.data)

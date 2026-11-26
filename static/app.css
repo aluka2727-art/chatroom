@@ -737,7 +737,7 @@ h1 { margin: 0; font: 600 27px/1.2 "Space Grotesk", sans-serif; }
 .mobile-keyboard:not([hidden]) + .app-footer { display: none; }
 .mobile-keyboard {
   display: grid;
-  gap: 4px;
+  gap: 5px;
   padding: 4px max(4px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
   border-top: 1px solid var(--line);
   background: var(--surface);
@@ -763,7 +763,7 @@ dialog > .mobile-keyboard {
 .mobile-keyboard-row button {
   flex: 1 1 0;
   min-width: 0;
-  height: clamp(24px, 5.5dvh, 42px);
+  height: clamp(24px, 6.75dvh, 51px);
   padding: 0;
   border: 1px solid var(--field-border);
   border-radius: 5px;
@@ -772,11 +772,8 @@ dialog > .mobile-keyboard {
   font-size: 20px;
   cursor: pointer;
 }
-.mobile-keyboard[data-layout="letters"] .mobile-keyboard-row:nth-child(3) { padding-inline: 5%; }
+.mobile-keyboard[data-layout="letters"] .mobile-keyboard-row:nth-child(2) { padding-inline: 5%; }
 .mobile-keyboard[data-layout="letters"] button:is([data-action="shift"], [data-action="delete"]) { flex-grow: 1.5; }
-.mobile-keyboard-row.mobile-keyboard-tools { justify-content: space-between; }
-.mobile-keyboard-tools button { flex: 0 0 auto; min-width: 48px; height: clamp(26px, 4dvh, 32px); }
-.mobile-keyboard-tools button,
 .mobile-keyboard-bottom button { font-size: 14px; }
 .mobile-keyboard button[data-action="emoji"] { display: grid; place-items: center; }
 .mobile-keyboard-bottom .mobile-keyboard-space { flex-grow: 4; }
@@ -792,8 +789,6 @@ dialog > .mobile-keyboard {
   line-height: 1.05;
   white-space: normal;
 }
-.mobile-keyboard-row button[data-action="caps"] { font-size: 14px; }
-.mobile-keyboard-row button[data-action="all"] { flex-grow: 1.5; }
 .mobile-keyboard-status { margin: 0; padding: 2px 4px; color: var(--muted); font-size: 12px; }
 
 .mobile-composer-caret {
@@ -932,4 +927,56 @@ dialog > .mobile-keyboard {
   margin-left: auto;
   background: var(--green);
   color: var(--on-green);
+}
+
+.install-guide-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.install-guide-steps figure {
+  display: grid;
+  grid-template-columns: minmax(105px, 35%) 1fr;
+  gap: 12px;
+  align-items: center;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.install-illustration {
+  display: grid;
+  min-height: 52px;
+  place-items: center;
+  padding: 5px;
+  border-radius: 6px;
+  background: var(--active);
+}
+
+.install-illustration-button {
+  padding: 3px 5px;
+  border: 1px solid var(--field-line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--green-deep);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.install-illustration-button b {
+  font-size: 15px;
+}
+
+.install-illustration img {
+  border-radius: 8px;
+}
+
+.install-guide-steps figcaption {
+  font-size: 13px;
+  line-height: 1.4;
 }

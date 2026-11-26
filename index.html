@@ -24,9 +24,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='1.14.1-keyboard-fields') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='1.14.1-install-guide') }}">
   <script src="{{ url_for('static', filename='emoji-data.js', v='unicode-17.0') }}" defer></script>
-  <script src="{{ url_for('static', filename='app.js', v='1.14.1-keyboard-fields') }}" defer></script>
+  <script src="{{ url_for('static', filename='app.js', v='1.14.1-install-guide') }}" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -267,6 +267,10 @@
                 <button class="settings-toggle" id="themeToggle" type="button" aria-pressed="false">Dark mode off</button>
               </div>
               <div class="settings-row">
+                <div class="settings-copy"><h3>Install PIGIN</h3><p>Add the web app to this device.</p></div>
+                <button class="settings-toggle" id="openInstallGuide" type="button">How to install</button>
+              </div>
+              <div class="settings-row">
                 <div class="settings-copy"><h3>Log out</h3><p>Sign out of PIGIN on this device.</p></div>
                 <button class="settings-toggle" id="switchAccount" type="button">Log out</button>
               </div>
@@ -347,13 +351,55 @@
           <button class="settings-toggle" id="tutorialPracticeCreate" type="button" disabled>Create practice group</button>
         </section>
         <section data-tutorial-step="2" hidden>
-          <h2 tabindex="-1">Try the shorter mobile keyboard</h2>
+          <h2 tabindex="-1">Try the optimized keyboard</h2>
           <p>Tap the message box in World Chat or a private conversation to open PIGIN’s mobile keyboard. The rows sit closer together now, so your thumbs can move between them more easily.</p>
-          <p>Tap <strong>Edit</strong> for editing controls or the <strong>down arrow</strong> to hide the keyboard and see more of the chat.</p>
+          <p>Tap outside the message box and keyboard to hide it and see more of the chat.</p>
         </section>
         <section data-tutorial-step="3" hidden>
-          <h2 tabindex="-1">Use PIGIN’s keyboard in any text box</h2>
-          <p>On mobile, tap any text box to open PIGIN’s keyboard, including group names, Private Username, and search. Tap <strong>Done</strong> to close the keyboard in a single-line field.</p>
+          <h2 tabindex="-1">Use the optimized keyboard in any text box</h2>
+          <p>On mobile, tap any text box to open the optimized keyboard, including group names, Private Username, and search. Tap <strong>Done</strong> to close the keyboard in a single-line field.</p>
+        </section>
+        <section id="installGuide" data-tutorial-step="4" hidden>
+          <h2 tabindex="-1">Install PIGIN as a web app</h2>
+          <p>PIGIN is currently available only as a web app. Install it directly from your browser.</p>
+          <p id="installGuideStandalone" role="status" hidden>You’re already using PIGIN in its own app window.</p>
+          <label class="field-label" for="installGuideDevice">Device and browser</label>
+          <select class="auth-input" id="installGuideDevice">
+            <option value="ios">iPhone or iPad · Safari</option>
+            <option value="android">Android · Chrome</option>
+            <option value="mac">Mac · Safari</option>
+            <option value="edge">Computer · Edge</option>
+            <option value="chrome">Computer · Chrome</option>
+          </select>
+          {% set install_guides = [
+            ('ios', '↑', 'Share', 'Add to Home Screen', 'Open PIGIN in Safari. Tap Share, or open the page menu and choose Share.', 'Choose Add to Home Screen. Turn on Open as Web App if shown, then tap Add.', 'Open PIGIN from your Home Screen.'),
+            ('android', '⋮', 'Chrome menu', 'Install app', 'Open PIGIN in Chrome and tap the three-dot menu.', 'Tap Install app. If you see Install and create shortcut or Add to Home screen, open it and choose Install.', 'Open PIGIN from your Home Screen or app list.'),
+            ('mac', '↑', 'Share', 'Add to Dock', 'Open PIGIN in Safari. Click Share in the toolbar.', 'Choose Add to Dock, then click Add.', 'Open PIGIN from your Dock.'),
+            ('edge', '⋯', 'Edge menu', 'Install this site as an app', 'Open PIGIN in Edge and click the three-dot menu.', 'Choose More tools, then Apps, then Install this site as an app. Confirm the install.', 'Open PIGIN from your app launcher.'),
+            ('chrome', '⋮', 'Chrome menu', 'Install page as app…', 'Open PIGIN in Chrome and click the three-dot menu.', 'Choose Cast, save, and share, then Install page as app. Confirm the install.', 'Open PIGIN from your app launcher.')
+          ] %}
+          {% for device, symbol, menu, install, first, second, third in install_guides %}
+          <ol class="install-guide-steps" data-install-device="{{ device }}" hidden>
+            <li>
+              <figure>
+                <div class="install-illustration" aria-hidden="true"><span class="install-illustration-button"><b>{{ symbol }}</b> {{ menu }}</span></div>
+                <figcaption>{{ first }}</figcaption>
+              </figure>
+            </li>
+            <li>
+              <figure>
+                <div class="install-illustration" aria-hidden="true"><span class="install-illustration-button"><b>＋</b> {{ install }}</span></div>
+                <figcaption>{{ second }}</figcaption>
+              </figure>
+            </li>
+            <li>
+              <figure>
+                <div class="install-illustration" aria-hidden="true"><img src="{{ url_for('static', filename='icon-192.png', v='pigin-logo') }}" alt="" width="36" height="36"></div>
+                <figcaption>{{ third }}</figcaption>
+              </figure>
+            </li>
+          </ol>
+          {% endfor %}
         </section>
         <p class="composer-error" id="tutorialError" role="alert" hidden></p>
         <div class="tutorial-actions tutorial-footer">
@@ -400,7 +446,7 @@
         <button class="login-submit" id="versionNotesAction" type="button">Got it</button>
       </section>
     </div>
-    <div class="mobile-keyboard" id="mobileKeyboard" role="group" aria-label="Pigin keyboard" hidden></div>
+    <div class="mobile-keyboard" id="mobileKeyboard" role="group" aria-label="PIGIN optimized keyboard" hidden></div>
     <footer class="app-footer">v1.14.1</footer>
   </div>
   <div class="app-loading" id="appLoading" role="status" aria-label="Loading PIGIN">

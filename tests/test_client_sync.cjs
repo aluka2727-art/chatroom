@@ -50,9 +50,9 @@ test('a refresh received during a DM fetch is followed immediately', async () =>
 test('custom keyboard edits single-line fields with and without a length limit', () => {
   const editing = source.slice(
     source.indexOf('function composerSnapshot'),
-    source.indexOf('function restoreKeyboardEdit'),
+    source.indexOf('async function pasteWithMobileKeyboard'),
   );
-  const context = vm.createContext({ keyboardHistory: new WeakMap(), Event });
+  const context = vm.createContext({ Event });
   vm.runInContext(editing, context);
 
   const input = {
@@ -78,4 +78,21 @@ test('custom keyboard edits single-line fields with and without a length limit',
   input.selectionStart = 0;
   context.editWithMobileKeyboard(input, 'insert', 'BC');
   assert.equal(input.value, 'BC');
+});
+
+test('install guide defaults to the detected device and browser', () => {
+  const detection = source.slice(
+    source.indexOf('function defaultInstallGuide'),
+    source.indexOf('function renderInstallGuide'),
+  );
+  const context = vm.createContext({});
+  vm.runInContext(detection, context);
+  const detect = context.defaultInstallGuide;
+
+  assert.equal(detect('iPhone Safari/604', 'iPhone', 5), 'ios');
+  assert.equal(detect('Macintosh Safari/604', 'MacIntel', 5), 'ios');
+  assert.equal(detect('Android Chrome/130', 'Linux armv8l', 5), 'android');
+  assert.equal(detect('Macintosh Safari/604', 'MacIntel', 0), 'mac');
+  assert.equal(detect('Chrome/130 Edg/130', 'Win32', 0), 'edge');
+  assert.equal(detect('Macintosh Chrome/130 Safari/537', 'MacIntel', 0), 'chrome');
 });
